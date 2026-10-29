@@ -114,7 +114,7 @@ async function build() {
 
   try {
     if (fam === "medium" || fam === "large") {
-      const [a, b] = await Promise.all([summary(key, "MYR"), summary(key, "KRW")]);
+      const [a, b] = await Promise.all([summary(key, "KRW"), summary(key, "MYR")]);
       const row = w.addStack(); row.layoutHorizontally();
       const l = row.addStack(); l.layoutVertically(); addCurrencyBlock(l, a, false);
       row.addSpacer();

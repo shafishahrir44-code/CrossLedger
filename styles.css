@@ -203,3 +203,43 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
 .tx-table tbody tr[data-id]:active td { background: var(--over-soft); }
 .tx-table td.act { width: 1%; padding: 0 2px; }
 .table-hint { margin: 6px 0 0; }
+
+/* user-managed categories / payment methods */
+.field-head { display: flex; justify-content: space-between; align-items: baseline; }
+.field-head > span { font-size: 13px; color: var(--ink-2); }
+.edit-link { font-size: 13px; padding: 6px 0 6px 12px; }
+.edit-link[aria-pressed="true"] { color: var(--exp); font-weight: 650; text-decoration: none; }
+.chips { justify-content: flex-start; }
+.chip-add {
+  border: 1px dashed var(--ink-2) !important; background: transparent !important; color: var(--ink-2);
+  min-width: 44px; font-size: 20px !important; line-height: 1; padding: 6px 14px !important;
+}
+.chip-add:hover, .chip-add:focus-visible { color: var(--ink); border-color: var(--ink) !important; }
+.editing .chips button:not(.chip-add), .editing .pills button:not(.chip-add) {
+  border-style: dashed; background: var(--surface); color: var(--ink); font-weight: 500;
+}
+.editing .chips button:not(.chip-add)::after, .editing .pills button:not(.chip-add)::after { content: " ✎"; color: var(--ink-2); }
+.list-hint { margin: 6px 0 0; }
+.seg-wide { display: flex; width: 100%; }
+.seg-wide button { flex: 1; }
+#item-kind button[aria-checked="true"][data-kind="income"] { background: var(--inc); color: #fff; }
+.remove-link { background: none; border: 0; color: var(--over); font-weight: 600; padding: 10px 0; min-height: 44px; }
+.remove-link.confirm { background: var(--over); color: #fff; border-radius: 12px; }
+
+/* category budgets */
+.optional { color: var(--ink-2); font-weight: 400; }
+.budget-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.budget-input { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); padding: 0 10px; }
+.budget-input:focus-within { outline: 3px solid var(--focus); outline-offset: 1px; }
+.budget-input > span { color: var(--ink-2); font-weight: 600; min-width: 1.6em; }
+.budget-input input { border: 0; padding: 11px 0; min-height: 44px; outline: none; }
+.bar-row .cat-name { display: grid; line-height: 1.25; }
+.bar-row .cat-sub { font-size: 12px; color: var(--ink-2); }
+.bar-row.over .cat-sub, .bar-row.over .num { color: var(--over); }
+.bar-track.has-budget { background: var(--exp-soft); }
+.bar-row.over .bar-track > i { background: var(--over); }
+.bar-row.over .bar-track { background: var(--over-soft); }
+.cat-note { margin: 8px 0 0; }
+
+/* the hidden attribute always wins over display rules */
+[hidden] { display: none !important; }

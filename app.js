@@ -30,6 +30,8 @@
     category: null,
     bankByCur: store.get("bankByCur", {}),
     requestId: uuid(),
+    editCats: false,
+    editBanks: false,
     lastSavedId: null,
     dashTimer: null,
     monthTx: [],
@@ -137,22 +139,204 @@
     $("amount").placeholder = decimals(S.currency) ? "0.00" : "0";
     renderBanks();
   }
+  // Chips for a user-managed list, ending with a "+" chip. In edit mode a tap opens the editor.
+  function renderPickList(container, names, current, { editing, onPick, onEdit, onAdd, addLabel }) {
+    const chips = names.map((v) => el("button", {
+      type: "button", role: editing ? null : "radio", "aria-checked": editing ? null : String(v === current), "data-v": v, text: v,
+      "aria-label": editing ? `Edit ${v}` : null,
+      onclick: () => {
+        if (editing) return onEdit(v);
+        onPick(v);
+        for (const b of container.children) if (!b.classList.contains("chip-add")) b.setAttribute("aria-checked", String(b.dataset.v === v));
+      },
+    }));
+    for (const c of chips) for (const a of ["role", "aria-checked", "aria-label"]) if (c.getAttribute(a) === "null") c.removeAttribute(a);
+    chips.push(el("button", { type: "button", class: "chip-add", "aria-label": addLabel, text: "+", onclick: onAdd }));
+    container.replaceChildren(...chips);
+  }
+  function catsForType() {
+    return S.meta.categories.filter((c) => c.kind === S.type || c.kind === "both").map((c) => c.name);
+  }
   function renderType() {
     document.body.classList.toggle("is-income", S.type === "income");
     for (const b of document.querySelectorAll('#add .seg button[data-type]')) b.setAttribute("aria-checked", String(b.dataset.type === S.type));
     $("save").textContent = S.type === "income" ? "Save income" : "Save expense";
-    const cats = S.meta.categories.filter((c) => c.kind === S.type || c.kind === "both").map((c) => c.name);
+    const cats = catsForType();
     if (!cats.includes(S.category)) S.category = store.get("cat." + S.type, cats[0]);
-    if (!cats.includes(S.category)) S.category = cats[0];
-    radioGroup($("cat-chips"), cats, S.category, (c) => { S.category = c; store.set("cat." + S.type, c); });
+    if (!cats.includes(S.category)) S.category = cats[0] ?? null;
+    renderPickList($("cat-chips"), cats, S.category, {
+      editing: S.editCats,
+      onPick: (c) => { S.category = c; store.set("cat." + S.type, c); $("form-err").hidden = true; },
+      onEdit: (c) => openItem("cat", c),
+      onAdd: () => openItem("cat", null),
+      addLabel: "Add category",
+    });
+    const hint = $("cat-hint");
+    hint.hidden = cats.length > 0 && !S.editCats;
+    hint.textContent = S.editCats ? "Tap a category to rename it, change its type or remove it."
+      : `Tap + to add your first ${S.type} category.`;
+    $("cat-edit").hidden = S.meta.categories.length === 0;
   }
   function renderBanks() {
     const banks = S.meta.banks;
     let cur = S.bankByCur[S.currency];
-    if (!banks.includes(cur)) cur = banks[0];
+    if (!banks.includes(cur)) cur = banks[0] ?? null;
     S.bankByCur[S.currency] = cur;
-    radioGroup($("bank-pills"), banks, cur, (b) => { S.bankByCur[S.currency] = b; store.set("bankByCur", S.bankByCur); });
+    renderPickList($("bank-pills"), banks, cur, {
+      editing: S.editBanks,
+      onPick: (b) => { S.bankByCur[S.currency] = b; store.set("bankByCur", S.bankByCur); $("form-err").hidden = true; },
+      onEdit: (b) => openItem("bank", b),
+      onAdd: () => openItem("bank", null),
+      addLabel: "Add payment method",
+    });
+    const hint = $("bank-hint");
+    hint.hidden = banks.length > 0 && !S.editBanks;
+    hint.textContent = S.editBanks ? "Tap a payment method to rename or remove it."
+      : "Tap + to add a payment method, e.g. Cash, KakaoBank, Maybank card.";
+    $("bank-edit").hidden = banks.length === 0;
   }
+  function toggleEdit(which) {
+    const key = which === "cat" ? "editCats" : "editBanks";
+    S[key] = !S[key];
+    const btn = $(which === "cat" ? "cat-edit" : "bank-edit");
+    btn.textContent = S[key] ? "Done" : "Edit";
+    btn.setAttribute("aria-pressed", String(S[key]));
+    btn.closest(".field").classList.toggle("editing", S[key]);
+    which === "cat" ? renderType() : renderBanks();
+  }
+  $("cat-edit").addEventListener("click", () => toggleEdit("cat"));
+  $("bank-edit").addEventListener("click", () => toggleEdit("bank"));
+
+  // ---------- add / edit / remove a category or payment method ----------
+  let itemCtx = null; // { list: "cat"|"bank", original: name|null, kind }
+  function setItemKind(kind) {
+    itemCtx.kind = kind;
+    for (const b of $("item-kind").children) b.setAttribute("aria-checked", String(b.dataset.kind === kind));
+    showBudgetFields();
+  }
+  function showBudgetFields() {
+    // budgets are for spending: hidden for payment methods and Income categories
+    $("item-budget-wrap").hidden = !itemCtx || itemCtx.list !== "cat" || itemCtx.kind === "income";
+  }
+  function budgetChanges() {
+    // returns [{currency, amount|null}] for inputs that differ from what's saved
+    if (itemCtx.list !== "cat" || itemCtx.kind === "income") return [];
+    const out = [];
+    for (const c of S.meta.currencies) {
+      const raw = ($(`item-budget-${c.code}`)?.value || "").replace(/,/g, "").trim();
+      const before = itemCtx.budgets?.[c.code];
+      const was = before === undefined || before === null ? null : Number(before);
+      const now = raw === "" || Number(raw) === 0 ? null : Number(raw);
+      if (raw !== "" && !(Number(raw) >= 0)) out.push({ currency: c.code, amount: raw }); // let the API explain
+      else if (now !== was) out.push({ currency: c.code, amount: now === null ? null : raw });
+    }
+    return out;
+  }
+  for (const b of $("item-kind").children) b.addEventListener("click", () => setItemKind(b.dataset.kind));
+  function openItem(list, name) {
+    const isCat = list === "cat";
+    const existing = isCat && name ? S.meta.categories.find((c) => c.name === name) : null;
+    itemCtx = { list, original: name, kind: existing ? existing.kind : S.type };
+    $("item-title").textContent = (name ? "Edit " : "New ") + (isCat ? "category" : "payment method");
+    $("item-name").value = name || "";
+    $("item-name").placeholder = isCat ? (S.type === "income" ? "e.g. Allowance" : "e.g. Food") : "e.g. Cash, KakaoBank";
+    $("item-kind-wrap").hidden = !isCat;
+    if (isCat) setItemKind(itemCtx.kind);
+    itemCtx.budgets = existing?.budgets || {};
+    $("item-budgets").replaceChildren(...S.meta.currencies.map((c) => {
+      const cur = existing?.budgets?.[c.code];
+      const input = el("input", { id: `item-budget-${c.code}`, inputmode: c.minor_units ? "decimal" : "numeric",
+        placeholder: "No budget", autocomplete: "off", "aria-label": `Monthly budget in ${c.code}` });
+      if (cur !== undefined && cur !== null) input.value = String(Number(cur));
+      return el("label", { class: "budget-input" }, el("span", { text: SYM[c.code] || c.code }), input);
+    }));
+    showBudgetFields();
+    $("item-save").textContent = name ? "Save" : "Add";
+    $("item-save").disabled = false;
+    $("item-err").hidden = true;
+    const rm = $("item-remove");
+    rm.hidden = !name; rm.classList.remove("confirm"); rm.dataset.armed = "";
+    rm.textContent = isCat ? "Remove category" : "Remove payment method";
+    $("item-dlg").showModal();
+    setTimeout(() => $("item-name").focus(), 50);
+  }
+  function itemError(err) {
+    let msg = err.message;
+    if (err instanceof ApiError && err.status === 404 && err.body?.error?.code === "not_found" && /Route/.test(msg)) {
+      msg = "Your server needs this update first: run scripts\\deploy.ps1 on your laptop.";
+    } else if (err.body?.error?.fields) {
+      msg = Object.entries(err.body.error.fields).map(([k, v]) => `${k === "kind" ? "type" : k} ${v}`).join(", ");
+    }
+    $("item-err").textContent = msg;
+    $("item-err").hidden = false;
+  }
+  async function afterListChange(list, selectName, message) {
+    await loadMeta();
+    if (list === "cat" && S.editCats && S.meta.categories.length === 0) toggleEdit("cat");
+    if (list === "bank" && S.editBanks && S.meta.banks.length === 0) toggleEdit("bank");
+    if (list === "cat") {
+      if (selectName && catsForType().includes(selectName)) { S.category = selectName; store.set("cat." + S.type, selectName); }
+      renderType();
+    } else {
+      if (selectName) { S.bankByCur[S.currency] = selectName; store.set("bankByCur", S.bankByCur); }
+      renderBanks();
+    }
+    loadRecent();
+    if (!$("dash").hidden) loadDash(true);
+    toast(message);
+  }
+  $("item-form").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "save") { itemCtx = null; return; }
+    e.preventDefault();
+    const name = $("item-name").value.replace(/\s+/g, " ").trim();
+    if (!name) { $("item-err").textContent = "Enter a name."; $("item-err").hidden = false; return; }
+    const { list, original, kind } = itemCtx;
+    const path = list === "cat" ? "/categories" : "/payment-methods";
+    $("item-save").disabled = true;
+    try {
+      let r = null;
+      const existing = list === "cat" && original ? S.meta.categories.find((c) => c.name === original) : null;
+      const catChanged = !original || name !== original || (list === "cat" && existing && existing.kind !== kind);
+      if (!original) r = await api("POST", path, list === "cat" ? { name, kind } : { name });
+      else if (list === "cat" && catChanged) r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind });
+      else if (list === "bank" && name !== original) r = await api("PATCH", path, { name: original, new_name: name });
+      const saved = r ? (r.category || r.payment_method).name : original;
+      if (r) {
+        // from here on, edits apply to the saved item (so a budget error can be fixed without re-adding)
+        itemCtx.original = saved;
+        if (original && list === "cat" && S.category === original) S.category = saved;
+        if (original && list === "bank") for (const k of Object.keys(S.bankByCur)) if (S.bankByCur[k] === original) S.bankByCur[k] = saved;
+      }
+      const msgs = r ? [r.message] : [];
+      for (const b of budgetChanges()) {
+        const br = await api("PUT", "/category-budgets", { category: saved, currency: b.currency, amount: b.amount });
+        msgs.push(br.message);
+        itemCtx.budgets = { ...itemCtx.budgets, [b.currency]: br.category_budget.amount };
+      }
+      $("item-dlg").close();
+      if (msgs.length) await afterListChange(list, original ? null : saved, msgs.join(". "));
+    } catch (err) {
+      if (itemCtx.original && !original) {   // category was created, budget failed: switch dialog to edit mode
+        $("item-title").textContent = "Edit category"; $("item-save").textContent = "Save";
+        await loadMeta(); renderType();
+      }
+      itemError(err); $("item-save").disabled = false;
+    }
+  });
+  $("item-remove").addEventListener("click", async () => {
+    const rm = $("item-remove");
+    if (!rm.dataset.armed) {                       // first tap arms, second tap removes
+      rm.dataset.armed = "1"; rm.classList.add("confirm");
+      rm.textContent = `Tap again to remove "${itemCtx.original}"`;
+      return;
+    }
+    const { list, original } = itemCtx;
+    try {
+      const r = await api("DELETE", list === "cat" ? "/categories" : "/payment-methods", { name: original });
+      $("item-dlg").close();
+      await afterListChange(list, null, r.message);
+    } catch (err) { itemError(err); }
+  });
   document.querySelectorAll('#add .seg button[data-type]').forEach((b) =>
     b.addEventListener("click", () => { S.type = b.dataset.type; renderType(); }));
 
@@ -160,7 +344,7 @@
     return {
       request_id: S.requestId,
       type: S.type,
-      item: $("item").value.trim() || S.category,
+      item: $("item").value.trim() || S.category || "",
       amount: $("amount").value.trim(),
       category: S.category,
       currency: S.currency,
@@ -188,10 +372,16 @@
   $("tx-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const body = readForm();
-    $("amount-err").hidden = true;
+    $("amount-err").hidden = true; $("form-err").hidden = true;
     if (!body.amount || !(Number(body.amount.replace(/,/g, "")) > 0)) {
       $("amount-err").textContent = "Enter an amount above zero.";
       $("amount-err").hidden = false; $("amount").focus(); return;
+    }
+    if (!body.category || !body.which_bank) {
+      $("form-err").textContent = !body.category
+        ? `Add ${S.type === "income" ? "an income" : "an expense"} category first: tap + under Category.`
+        : "Add a payment method first: tap + under Payment method.";
+      $("form-err").hidden = false; return;
     }
     $("save").disabled = true;
     try {
@@ -322,14 +512,23 @@
     $("meter-today").hidden = !isNow;
     if (isNow) $("meter-today").style.left = ((new Date().getDate() / days) * 100).toFixed(1) + "%";
 
-    // by category
+    // by category: bars show % of the category budget where there is one, otherwise share of the biggest spend
     const maxC = Math.max(1, ...s.by_category.map((c) => Number(c.amount)));
+    const fill = (pct) => { const i = document.createElement("i"); i.style.width = Math.min(100, Math.max(0, pct)).toFixed(1) + "%"; return i; };
     $("ch-cat").replaceChildren(s.by_category.length
-      ? el("div", { class: "bars" }, ...s.by_category.map((c) => el("div", { class: "bar-row" },
-          el("span", { text: c.category }),
-          el("span", { class: "bar-track" }, (() => { const i = document.createElement("i"); i.style.width = (Number(c.amount) / maxC * 100).toFixed(1) + "%"; return i; })()),
-          el("span", { class: "num", text: f(c.amount) }))))
+      ? el("div", { class: "bars" }, ...s.by_category.map((c) => {
+          const hasB = c.budget !== null && c.budget !== undefined;
+          const sub = !hasB ? null : c.over
+            ? `${f(-Number(c.remaining))} over ${f(c.budget)} budget`
+            : `${f(c.remaining)} left of ${f(c.budget)}`;
+          return el("div", { class: "bar-row" + (hasB && c.over ? " over" : "") },
+            el("span", { class: "cat-name" }, el("span", { text: c.category }), ...(sub ? [el("span", { class: "cat-sub", text: sub })] : [])),
+            el("span", { class: "bar-track" + (hasB ? " has-budget" : ""), title: hasB ? `${Number(c.used_pct).toFixed(0)}% of budget used` : "" },
+              fill(hasB ? Number(c.used_pct) : Number(c.amount) / maxC * 100)),
+            el("span", { class: "num", text: f(c.amount) }));
+        }))
       : el("p", { class: "muted small", text: "No spending this month yet." }));
+    $("cat-note").hidden = !s.by_category.some((c) => c.budget !== null && c.budget !== undefined);
 
     $("ch-daily").innerHTML = svgBars(s.daily.map((d) => Number(d.expenses)), s.daily.map((d) => String(Number(d.date.slice(8)))), { fmt: f });
     const months = s.monthly.map((x) => x.month.slice(2).replace("-", "/"));

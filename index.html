@@ -52,13 +52,23 @@
       </label>
       <p id="amount-err" class="error center" hidden></p>
 
-      <div class="chips" id="cat-chips" role="radiogroup" aria-label="Category"></div>
+      <div class="field">
+        <div class="field-head"><span id="cat-label">Category</span>
+          <button type="button" class="link edit-link" id="cat-edit" aria-pressed="false">Edit</button></div>
+        <div class="chips" id="cat-chips" role="radiogroup" aria-labelledby="cat-label"></div>
+        <p id="cat-hint" class="muted small list-hint" hidden></p>
+      </div>
 
-      <label class="field"><span>What was it?</span>
+      <label class="field"><span>Description</span>
         <input id="item" maxlength="120" placeholder="Lunch, bus card, rent…" enterkeyhint="done"></label>
 
-      <div class="field"><span>Paid with</span>
-        <div class="pills" id="bank-pills" role="radiogroup" aria-label="Bank"></div></div>
+      <div class="field">
+        <div class="field-head"><span id="bank-label">Payment method</span>
+          <button type="button" class="link edit-link" id="bank-edit" aria-pressed="false">Edit</button></div>
+        <div class="pills" id="bank-pills" role="radiogroup" aria-labelledby="bank-label"></div>
+        <p id="bank-hint" class="muted small list-hint" hidden></p>
+      </div>
+      <p id="form-err" class="error" role="alert" hidden></p>
 
       <details class="more">
         <summary>Date and notes</summary>
@@ -112,7 +122,8 @@
       <div class="kpi"><div class="muted small">Net</div><div id="k-net" class="num kpi-v">—</div></div>
     </div>
 
-    <section class="panel"><h2>Spending by category</h2><div id="ch-cat"></div></section>
+    <section class="panel"><h2>Spending by category</h2><div id="ch-cat"></div>
+      <p class="muted small cat-note" id="cat-note" hidden>Where a category has a budget, its bar shows how much of that budget is used.</p></section>
     <section class="panel"><h2>Daily spending</h2><div id="ch-daily" class="chart"></div></section>
     <section class="panel"><h2>Monthly spending vs budget</h2><div id="ch-month" class="chart"></div></section>
     <section class="panel"><h2>Income vs expenses</h2><div id="ch-ie" class="chart"></div></section>
@@ -122,11 +133,11 @@
       <div class="filters">
         <select id="f-type" aria-label="Type"><option value="">All types</option><option>Expense</option><option>Income</option></select>
         <select id="f-cat" aria-label="Category"><option value="">All categories</option></select>
-        <select id="f-bank" aria-label="Bank"><option value="">All banks</option></select>
+        <select id="f-bank" aria-label="Payment method"><option value="">All payment methods</option></select>
       </div>
       <div class="table-wrap">
         <table class="tx-table">
-          <thead><tr><th>Date</th><th>Item</th><th>Category</th><th class="r">Amount</th><th>Bank</th><th>Type</th></tr></thead>
+          <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="r">Amount</th><th>Payment method</th><th>Type</th></tr></thead>
           <tbody id="tx-body"></tbody>
         </table>
       </div>
@@ -144,6 +155,31 @@
     <span id="toast-msg"></span>
     <button type="button" id="toast-undo" class="link" hidden>Undo</button>
   </div>
+
+  <dialog id="item-dlg">
+    <form method="dialog" id="item-form" class="stack" novalidate>
+      <h2 id="item-title">New category</h2>
+      <label class="field"><span>Name</span>
+        <input id="item-name" maxlength="40" autocomplete="off" autocapitalize="words" enterkeyhint="done"></label>
+      <div class="field" id="item-kind-wrap"><span id="item-kind-label">Used for</span>
+        <div class="seg seg-wide" id="item-kind" role="radiogroup" aria-labelledby="item-kind-label">
+          <button type="button" role="radio" data-kind="expense" aria-checked="true">Expense</button>
+          <button type="button" role="radio" data-kind="income" aria-checked="false">Income</button>
+          <button type="button" role="radio" data-kind="both" aria-checked="false">Both</button>
+        </div></div>
+      <div class="field" id="item-budget-wrap">
+        <span id="item-budget-label">Monthly budget <span class="optional">(optional)</span></span>
+        <div class="budget-row" id="item-budgets" role="group" aria-labelledby="item-budget-label"></div>
+        <span class="muted small">Same amount every month. Leave empty for no budget.</span>
+      </div>
+      <p id="item-err" class="error" hidden></p>
+      <div class="row">
+        <button value="cancel" formnovalidate class="ghost" type="submit">Cancel</button>
+        <button id="item-save" class="primary" value="save" type="submit">Add</button>
+      </div>
+      <button type="button" id="item-remove" class="remove-link" hidden>Remove</button>
+    </form>
+  </dialog>
 
   <dialog id="del-dlg">
     <form method="dialog" id="del-form" class="stack">
