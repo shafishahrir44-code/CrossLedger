@@ -1,0 +1,18 @@
+{
+  "name": "Ledger — expenses & budget",
+  "short_name": "Ledger",
+  "start_url": "./?tab=add",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#eef1f4",
+  "theme_color": "#eef1f4",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "shortcuts": [
+    { "name": "Add expense", "url": "./?tab=add" },
+    { "name": "Dashboard", "url": "./?tab=dash" }
+  ]
+}

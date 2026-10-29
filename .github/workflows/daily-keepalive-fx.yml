@@ -1,0 +1,27 @@
+# Runs once a day:
+#  1. pulls the official ECB reference rates (MYR<->KRW) into the database, used only by the
+#     optional converted view, always stored with date + source;
+#  2. generates real database activity so the Supabase free project is not paused for
+#     inactivity (free projects pause after 7 idle days).
+# Note: GitHub disables scheduled workflows in repos with no commits for 60 days; normal app
+# use also keeps Supabase active, and README explains how to re-enable this job.
+name: daily-keepalive-fx
+on:
+  schedule:
+    - cron: "17 23 * * *"   # 08:17 KST
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Sync FX rates and keep database active
+        env:
+          API_URL: ${{ secrets.EXPENSE_API_URL }}
+          API_KEY: ${{ secrets.EXPENSE_API_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 3 --retry-delay 10 -X POST "$API_URL/fx/sync" -H "x-api-key: $API_KEY" -o /dev/null
+          curl -fsS --retry 3 "$API_URL/health"

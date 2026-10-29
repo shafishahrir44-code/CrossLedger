@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.supabase.co http://localhost:8000; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<meta name="theme-color" content="#eef1f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#11161c" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+<title>Ledger</title>
+</head>
+<body>
+<div id="app">
+
+  <!-- One-time setup on each device -->
+  <section id="setup" class="screen" hidden>
+    <h1 class="setup-title">Connect this phone</h1>
+    <p class="muted">Paste the API key once. It stays on this device only and is never in the page source.</p>
+    <form id="setup-form" class="stack" autocomplete="off">
+      <label class="field"><span>API address</span>
+        <input id="setup-url" type="url" required inputmode="url" spellcheck="false"></label>
+      <label class="field"><span>API key</span>
+        <input id="setup-key" type="password" required spellcheck="false" autocomplete="off"></label>
+      <button class="primary" type="submit">Connect</button>
+      <p id="setup-error" class="error" role="alert" hidden></p>
+    </form>
+  </section>
+
+  <!-- Entry -->
+  <section id="add" class="screen" hidden>
+    <header class="topbar">
+      <div class="seg" role="radiogroup" aria-label="Transaction type">
+        <button type="button" role="radio" data-type="expense" aria-checked="true">Expense</button>
+        <button type="button" role="radio" data-type="income" aria-checked="false">Income</button>
+      </div>
+      <div class="seg seg-cur" role="radiogroup" aria-label="Currency" id="cur-seg"></div>
+    </header>
+
+    <form id="tx-form" autocomplete="off" novalidate>
+      <label class="amount-wrap" for="amount">
+        <span id="amount-sym" class="amount-sym">RM</span>
+        <input id="amount" class="amount" inputmode="decimal" placeholder="0" aria-label="Amount" enterkeyhint="next">
+      </label>
+      <p id="amount-err" class="error center" hidden></p>
+
+      <div class="chips" id="cat-chips" role="radiogroup" aria-label="Category"></div>
+
+      <label class="field"><span>What was it?</span>
+        <input id="item" maxlength="120" placeholder="Lunch, bus card, rent…" enterkeyhint="done"></label>
+
+      <div class="field"><span>Paid with</span>
+        <div class="pills" id="bank-pills" role="radiogroup" aria-label="Bank"></div></div>
+
+      <details class="more">
+        <summary>Date and notes</summary>
+        <div class="row">
+          <label class="field grow"><span>Date</span><input id="date" type="date"></label>
+        </div>
+        <label class="field"><span>Notes</span><textarea id="notes" maxlength="500" rows="2"></textarea></label>
+      </details>
+
+      <div class="savebar">
+        <button id="save" class="primary" type="submit">Save expense</button>
+      </div>
+    </form>
+
+    <section class="recent">
+      <h2>Latest</h2>
+      <ul id="recent-list" class="tx-list"></ul>
+    </section>
+  </section>
+
+  <!-- Live dashboard -->
+  <section id="dash" class="screen" hidden>
+    <header class="topbar">
+      <input id="month" type="month" aria-label="Month" class="month">
+      <div class="seg seg-cur" role="radiogroup" aria-label="Currency" id="dash-cur-seg"></div>
+    </header>
+
+    <div class="meter-card">
+      <div class="meter-head">
+        <div>
+          <div class="muted small">Spent this month</div>
+          <div id="k-exp" class="big num">—</div>
+        </div>
+        <div class="right">
+          <div class="muted small" id="k-rem-label">Remaining</div>
+          <div id="k-rem" class="mid num">—</div>
+        </div>
+      </div>
+      <div class="meter" id="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-label="Budget used">
+        <div class="meter-fill" id="meter-fill"></div>
+        <div class="meter-today" id="meter-today" title="Today's share of the month"></div>
+      </div>
+      <div class="meter-foot">
+        <span id="k-used" class="num">—</span>
+        <button type="button" class="link" id="budget-btn">Budget <span id="k-bud" class="num">not set</span></button>
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="muted small">Income</div><div id="k-inc" class="num kpi-v inc">—</div></div>
+      <div class="kpi"><div class="muted small">Net</div><div id="k-net" class="num kpi-v">—</div></div>
+    </div>
+
+    <section class="panel"><h2>Spending by category</h2><div id="ch-cat"></div></section>
+    <section class="panel"><h2>Daily spending</h2><div id="ch-daily" class="chart"></div></section>
+    <section class="panel"><h2>Monthly spending vs budget</h2><div id="ch-month" class="chart"></div></section>
+    <section class="panel"><h2>Income vs expenses</h2><div id="ch-ie" class="chart"></div></section>
+
+    <section class="panel">
+      <h2>Transactions</h2>
+      <div class="filters">
+        <select id="f-type" aria-label="Type"><option value="">All types</option><option>Expense</option><option>Income</option></select>
+        <select id="f-cat" aria-label="Category"><option value="">All categories</option></select>
+        <select id="f-bank" aria-label="Bank"><option value="">All banks</option></select>
+      </div>
+      <div class="table-wrap">
+        <table class="tx-table">
+          <thead><tr><th>Date</th><th>Item</th><th>Category</th><th class="r">Amount</th><th>Bank</th><th>Type</th></tr></thead>
+          <tbody id="tx-body"></tbody>
+        </table>
+      </div>
+      <p class="muted small table-hint">Tap a row to delete it.</p>
+    </section>
+    <p class="muted small center" id="updated">Not loaded yet</p>
+  </section>
+
+  <nav class="tabs" id="tabs" hidden>
+    <button type="button" data-tab="add" aria-current="page">Add</button>
+    <button type="button" data-tab="dash">Dashboard</button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+    <span id="toast-msg"></span>
+    <button type="button" id="toast-undo" class="link" hidden>Undo</button>
+  </div>
+
+  <dialog id="del-dlg">
+    <form method="dialog" id="del-form" class="stack">
+      <h2>Delete this entry?</h2>
+      <p id="del-what" class="del-what"></p>
+      <p class="muted small">This removes it from the database, the dashboard and Power BI. It can't be undone.</p>
+      <p id="del-err" class="error" hidden></p>
+      <div class="row">
+        <button value="cancel" class="ghost" type="submit">Keep</button>
+        <button id="del-yes" class="danger" value="delete" type="submit">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="budget-dlg">
+    <form method="dialog" id="budget-form" class="stack">
+      <h2 id="budget-title">Monthly budget</h2>
+      <label class="field"><span>Amount</span><input id="budget-amt" inputmode="decimal" required></label>
+      <label class="check"><input type="checkbox" id="budget-only-month"> Only for this month (otherwise it is the default for every month)</label>
+      <p id="budget-err" class="error" hidden></p>
+      <div class="row">
+        <button value="cancel" formnovalidate class="ghost" type="submit">Cancel</button>
+        <button id="budget-save" class="primary" value="save" type="submit">Save budget</button>
+      </div>
+    </form>
+  </dialog>
+</div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
