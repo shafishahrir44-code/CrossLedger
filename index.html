@@ -121,10 +121,17 @@
       <div class="kpi"><div class="muted small">Net</div><div id="k-net" class="num kpi-v">—</div></div>
     </div>
 
-    <section class="panel"><h2>Spending by category</h2><div id="ch-cat"></div></section>
-    <section class="panel"><h2>Daily spending</h2><div id="ch-daily" class="chart"></div></section>
-    <section class="panel"><h2>Monthly spending vs budget</h2><div id="ch-month" class="chart"></div></section>
-    <section class="panel"><h2>Income vs expenses</h2><div id="ch-ie" class="chart"></div></section>
+    <section class="panel">
+      <h2>Spending by category</h2>
+      <div class="donut-wrap" id="ch-donut"></div>
+      <div id="ch-cat"></div>
+    </section>
+    <section class="panel">
+      <h2>Spending trend by category</h2>
+      <div id="ch-trend" class="chart"></div>
+      <p class="muted small trend-detail" id="trend-detail"></p>
+      <div class="legend legend-wrap" id="trend-legend"></div>
+    </section>
 
     <section class="panel">
       <h2>Transactions</h2>
@@ -151,8 +158,14 @@
       <button type="button" class="add-btn" id="asset-add">+ Add asset</button>
     </header>
     <div class="networth" id="networth"></div>
+    <section class="panel" id="asset-trend-panel" hidden>
+      <div class="trend-head">
+        <h2>Last 3 months</h2>
+        <select id="asset-trend-cat" aria-label="Show"><option value="">Total net worth</option></select>
+      </div>
+      <div class="asset-trends" id="asset-trends"></div>
+    </section>
     <div id="asset-groups"></div>
-    <p class="muted small center" id="assets-updated"></p>
   </section>
 
   <nav class="tabs" id="tabs" hidden>
@@ -217,6 +230,9 @@
         <input id="asset-name" maxlength="60" autocomplete="off" autocapitalize="words" placeholder="e.g. Maybank savings, Public Gold 10 g"></label>
       <label class="field"><span>Current value</span>
         <span class="budget-input"><span id="asset-sym">RM</span><input id="asset-value" inputmode="decimal" autocomplete="off" placeholder="0.00"></span></label>
+      <label class="field"><span>Date</span>
+        <input id="asset-date" type="date">
+        <span class="muted small" id="asset-date-hint"></span></label>
       <label class="field"><span>Notes <span class="optional">(optional)</span></span>
         <textarea id="asset-notes" maxlength="500" rows="2"></textarea></label>
       <p id="asset-err" class="error" hidden></p>

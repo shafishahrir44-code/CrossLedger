@@ -520,24 +520,119 @@
     }
   });
 
-  // ---------- dashboard ----------
-  function svgBars(values, labels, { color = "b-exp", h = 140, budgetLine = null, series2 = null, color2 = "b-inc", fmt } = {}) {
-    const W = 600, pad = { l: 8, r: 8, t: 10, b: 22 };
-    const max = Math.max(1, ...values, ...(series2 || []), budgetLine ?? 0);
-    const n = values.length, slot = (W - pad.l - pad.r) / n, bw = Math.max(2, slot * (series2 ? 0.36 : 0.62));
-    const y = (v) => pad.t + (h - pad.t - pad.b) * (1 - v / max);
-    let s = `<svg viewBox="0 0 ${W} ${h}" role="img" aria-label="chart">`;
-    values.forEach((v, i) => {
-      const x = pad.l + slot * i + (slot - (series2 ? bw * 2 + 2 : bw)) / 2;
-      if (v > 0) s += `<rect x="${x.toFixed(1)}" y="${y(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(h - pad.b - y(v)).toFixed(1)}" rx="2" class="${color}"><title>${esc(labels[i])}: ${esc(fmt(v))}</title></rect>`;
-      if (series2 && series2[i] > 0) s += `<rect x="${(x + bw + 2).toFixed(1)}" y="${y(series2[i]).toFixed(1)}" width="${bw.toFixed(1)}" height="${(h - pad.b - y(series2[i])).toFixed(1)}" rx="2" class="${color2}"><title>${esc(labels[i])}: ${esc(fmt(series2[i]))}</title></rect>`;
-    });
-    if (budgetLine) s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(budgetLine)}" y2="${y(budgetLine)}" class="b-line"/>`;
-    const every = Math.ceil(n / 8);
-    labels.forEach((lb, i) => { if (i % every === 0 || i === n - 1) s += `<text x="${(pad.l + slot * i + slot / 2).toFixed(1)}" y="${h - 6}" text-anchor="middle">${esc(lb)}</text>`; });
-    return s + "</svg>";
+  // ---------- charts (hand-drawn SVG) ----------
+  // Colours: 8 categorical slots, --s1..--s8 in styles.css (validated for colour-blind separation in
+  // light and dark). A category keeps its colour wherever it appears: its colour is its position in the
+  // user's own category list for that currency, so adding/removing others never repaints it.
+  // Categories past the 8th fold into "Other" (grey) instead of inventing a 9th hue.
+  const SLOTS = 8;
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svgEl = (tag, attrs = {}) => { const n = document.createElementNS(svgNS, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
+  function catPalette(cur, extraNames = []) {
+    const names = S.meta.categories.filter((c) => (!c.currency || c.currency === cur) && c.kind !== "income").map((c) => c.name);
+    for (const n of extraNames) if (!names.includes(n)) names.push(n);   // hidden categories that still have spending
+    const slot = new Map(names.map((n, i) => [n, i]));
+    return {
+      key: (n) => ((slot.get(n) ?? SLOTS) < SLOTS ? n : "Other"),
+      color: (n) => { const i = slot.get(n) ?? SLOTS; return i < SLOTS ? `var(--s${i + 1})` : "var(--s-other)"; },
+      order: (a, b) => (slot.get(a) ?? 99) - (slot.get(b) ?? 99),
+    };
+  }
+  function compactMoney(v, cur) {
+    const n = Math.abs(Number(v)), sym = SYM[cur] ?? cur + " ", sp = cur === "MYR" ? " " : "";
+    const t = n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M"
+      : n >= 1e4 ? (n / 1e3).toFixed(0) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n));
+    return (Number(v) < 0 ? "−" : "") + sym + sp + t.replace(".0", "");
   }
 
+  // Doughnut: share of this month's spending per category. Tap a slice for its amount.
+  function renderDonut(box, items, cur) {
+    const total = items.reduce((a, x) => a + x.value, 0);
+    box.replaceChildren();
+    if (!(total > 0)) { box.hidden = true; return; }
+    box.hidden = false;
+    const R = 50, C = 2 * Math.PI * R, gap = items.length > 1 ? 1.5 : 0;   // 2px surface gap between slices (viewBox units)
+    const svg = svgEl("svg", { viewBox: "0 0 140 140", role: "img", "aria-label": "Spending by category" });
+    const center = el("div", { class: "donut-center" });
+    const showTotal = () => center.replaceChildren(el("div", { class: "muted small", text: "Spent" }), el("div", { class: "num donut-v", text: money(total, cur) }));
+    let off = 0;
+    const segs = [];
+    const apply = () => {   // the picked slice survives the 15-second refresh
+      const x = items.find((i) => i.label === S.donutPick);
+      if (!x) { S.donutPick = null; for (const g of segs) g.classList.remove("dim"); return showTotal(); }
+      for (const g of segs) g.classList.toggle("dim", g.dataset.label !== x.label);
+      center.replaceChildren(el("div", { class: "muted small", text: x.label }), el("div", { class: "num donut-v", text: money(x.value, cur) }),
+        el("div", { class: "muted small", text: `${(x.value / total * 100).toFixed(1)}%` }));
+    };
+    for (const x of items) {
+      const len = (x.value / total) * C;
+      const c = svgEl("circle", { cx: 70, cy: 70, r: R, fill: "none", "stroke-width": 22,
+        "stroke-dasharray": `${Math.max(0.01, len - gap).toFixed(2)} ${(C - len + gap).toFixed(2)}`,
+        "stroke-dashoffset": (-off).toFixed(2), transform: "rotate(-90 70 70)", class: "donut-seg", tabindex: "0" });
+      c.style.stroke = x.color; c.dataset.label = x.label; segs.push(c);
+      c.append(svgEl("title")); c.lastChild.textContent = `${x.label}: ${money(x.value, cur)} (${(x.value / total * 100).toFixed(1)}%)`;
+      const pick = () => { S.donutPick = S.donutPick === x.label ? null : x.label; apply(); };
+      c.addEventListener("click", pick);
+      c.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+      svg.append(c);
+      off += len;
+    }
+    apply();
+    box.append(el("div", { class: "donut" }, svg, center));
+  }
+
+  // Stacked bars: spending per category for each month in the window (ends at the selected month).
+  // Tap a month for its breakdown.
+  function renderTrend(trend, cur, pal) {
+    const box = $("ch-trend"), detail = $("trend-detail"), legend = $("trend-legend");
+    const months = trend?.months || [];
+    const byMonth = new Map(months.map((m) => [m, new Map()]));
+    for (const r of trend?.rows || []) {
+      const m = byMonth.get(r.month); if (!m) continue;
+      const k = pal.key(r.category);
+      m.set(k, (m.get(k) || 0) + Number(r.amount));
+    }
+    const cats = [...new Set([...byMonth.values()].flatMap((m) => [...m.keys()]))].sort((a, b) => (a === "Other") - (b === "Other") || pal.order(a, b));
+    const totals = months.map((m) => [...byMonth.get(m).values()].reduce((a, v) => a + v, 0));
+    const max = Math.max(...totals, 0);
+    box.replaceChildren(); legend.replaceChildren(); detail.textContent = "";
+    if (!(max > 0)) { box.append(el("p", { class: "muted small", text: "No spending in these months yet." })); return; }
+    const W = 600, H = 170, pl = 6, pr = 6, pt = 18, pb = 22, slotW = (W - pl - pr) / months.length, bw = Math.min(56, slotW * 0.56);
+    const y = (v) => (H - pb) - (H - pt - pb) * (v / max);
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Monthly spending by category" });
+    svg.append(svgEl("line", { x1: pl, x2: W - pr, y1: H - pb, y2: H - pb, class: "axis" }));
+    const label = (m) => new Date(m + "-01T00:00:00").toLocaleString("en", { month: "short" });
+    const showMonth = (i) => {
+      const m = months[i], parts = cats.filter((c) => byMonth.get(m).get(c)).map((c) => `${c} ${money(byMonth.get(m).get(c), cur)}`);
+      detail.textContent = `${new Date(m + "-01T00:00:00").toLocaleString("en", { month: "long", year: "numeric" })}: ${money(totals[i], cur)}` + (parts.length ? ` · ${parts.join(", ")}` : "");
+      for (const g of svg.querySelectorAll(".col")) g.classList.toggle("dim", g.dataset.i !== String(i));
+    };
+    months.forEach((m, i) => {
+      const g = svgEl("g", { class: "col", "data-i": i, tabindex: "0" });
+      const x = pl + slotW * i + (slotW - bw) / 2;
+      let base = 0;
+      for (const c of cats) {
+        const v = byMonth.get(m).get(c) || 0; if (!(v > 0)) continue;
+        const y0 = y(base), y1 = y(base + v), h = Math.max(1, y0 - y1 - 2);   // 2px surface gap between segments
+        const r = svgEl("rect", { x: x.toFixed(1), y: (y1).toFixed(1), width: bw.toFixed(1), height: h.toFixed(1), rx: 3 });
+        r.style.fill = pal.color(c === "Other" ? "\u0000" : c);
+        r.append(svgEl("title")); r.lastChild.textContent = `${label(m)} · ${c}: ${money(v, cur)}`;
+        g.append(r);
+        base += v;
+      }
+      if (totals[i] > 0) { const t = svgEl("text", { x: (x + bw / 2).toFixed(1), y: (y(totals[i]) - 5).toFixed(1), "text-anchor": "middle", class: "val" }); t.textContent = compactMoney(totals[i], cur); g.append(t); }
+      const t = svgEl("text", { x: (x + bw / 2).toFixed(1), y: H - 6, "text-anchor": "middle", class: i === months.length - 1 ? "cur" : "" }); t.textContent = label(m); g.append(t);
+      g.append(svgEl("rect", { x: (pl + slotW * i).toFixed(1), y: 0, width: slotW.toFixed(1), height: H, class: "hit" }));   // bigger tap target
+      g.addEventListener("click", () => showMonth(i));
+      g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showMonth(i); } });
+      svg.append(g);
+    });
+    box.append(svg);
+    for (const c of cats) { const i = el("i"); i.style.background = pal.color(c === "Other" ? "\u0000" : c); legend.append(el("span", {}, i, c)); }
+    showMonth(months.length - 1);
+  }
+
+  // ---------- dashboard ----------
   async function loadDash(silent = false) {
     const cur = S.dashCurrency, month = $("month").value || todayLocal().slice(0, 7);
     try {
@@ -573,7 +668,15 @@
     $("meter-today").hidden = !isNow;
     if (isNow) $("meter-today").style.left = ((new Date().getDate() / days) * 100).toFixed(1) + "%";
 
-    // by category: with a budget the bar and the value show % of that budget used;
+    // Spending by category: doughnut + rows. Colours come from the user's own category list for
+    // this currency, so creating / renaming / removing a category redraws everything consistently.
+    const pal = catPalette(cur, [...s.by_category.map((c) => c.category), ...(s.category_trend?.rows || []).map((r) => r.category)]);
+    const slices = new Map();
+    for (const c of s.by_category) if (Number(c.amount) > 0) { const kk = pal.key(c.category); slices.set(kk, (slices.get(kk) || 0) + Number(c.amount)); }
+    renderDonut($("ch-donut"), [...slices.entries()].sort((a, b) => b[1] - a[1])
+      .map(([label, value]) => ({ label, value, color: pal.color(label === "Other" ? "\u0000" : label) })), cur);
+
+    // rows = budget progress bars: with a budget the bar and the value show % of that budget used;
     // without one, the bar is the share of the biggest spend and the value is the amount
     const maxC = Math.max(1, ...s.by_category.map((c) => Number(c.amount)));
     const fill = (pct) => { const i = document.createElement("i"); i.style.width = Math.min(100, Math.max(0, pct)).toFixed(1) + "%"; return i; };
@@ -581,21 +684,17 @@
       ? el("div", { class: "bars" }, ...s.by_category.map((c) => {
           const hasB = c.budget !== null && c.budget !== undefined;
           const pct = hasB ? Number(c.used_pct) : null;
+          const dot = el("i", { class: "dot" }); dot.style.background = pal.color(c.category);
           return el("div", { class: "bar-row" + (hasB && c.over ? " over" : ""),
                              title: hasB ? `${f(c.amount)} of ${f(c.budget)}` : f(c.amount) },
-            el("span", { class: "cat-name", text: c.category }),
+            el("span", { class: "cat-name" }, dot, el("span", { text: c.category })),
             el("span", { class: "bar-track" + (hasB ? " has-budget" : "") },
               fill(hasB ? pct : Number(c.amount) / maxC * 100)),
             el("span", { class: "num", text: hasB ? `${pct.toFixed(1)}% used` : f(c.amount) }));
         }))
       : el("p", { class: "muted small", text: "No spending this month yet." }));
 
-    $("ch-daily").innerHTML = svgBars(s.daily.map((d) => Number(d.expenses)), s.daily.map((d) => String(Number(d.date.slice(8)))), { fmt: f });
-    const months = s.monthly.map((x) => x.month.slice(2).replace("-", "/"));
-    $("ch-month").innerHTML = svgBars(s.monthly.map((x) => Number(x.expenses)), months, { fmt: f, budgetLine: hasBudget ? Number(k.monthly_budget) : null })
-      + (hasBudget ? `<div class="legend"><span><i class="l-exp"></i>Spending</span><span><i class="l-over"></i>This month's budget</span></div>` : "");
-    $("ch-ie").innerHTML = svgBars(s.monthly.map((x) => Number(x.income)), months, { fmt: f, color: "b-inc", series2: s.monthly.map((x) => Number(x.expenses)), color2: "b-exp" })
-      + `<div class="legend"><span><i class="l-inc"></i>Income</span><span><i class="l-exp"></i>Expenses</span></div>`;
+    renderTrend(s.category_trend, cur, pal);
   }
   function fillSelect(sel, values) {
     const keep = sel.value;
@@ -643,15 +742,15 @@
 
   // ---------- assets / net worth ----------
   // asset categories are a user-managed list (shared by RM and ₩): + to add, Edit to rename / remove
-  const A = { list: [], totals: {}, categories: [], ctx: null, editCats: false };
+  const A = { list: [], totals: {}, categories: [], history: [], ctx: null, editCats: false,
+              open: new Set(store.get("assetOpen", [])) };   // expanded category groups ("MYR|Gold")
   const assetCatNames = () => A.categories.map((c) => (typeof c === "string" ? c : c.name));
   const curOrder = () => S.meta.currencies.map((c) => c.code).sort((a, b) => (a === "MYR" ? -1 : b === "MYR" ? 1 : a.localeCompare(b)));
   async function loadAssets(silent = false) {
     try {
       const r = await api("GET", "/assets");
-      A.list = r.assets; A.totals = r.totals; A.categories = r.categories;
+      A.list = r.assets; A.totals = r.totals; A.categories = r.categories; A.history = r.history || [];
       renderAssets();
-      $("assets-updated").textContent = A.list.length ? "Values are what you last entered. Tap an asset to update it." : "";
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
       if (e instanceof ApiError && e.status === 404) {
@@ -661,6 +760,8 @@
       if (!silent) toast("Couldn't load assets: " + e.message, { bad: true });
     }
   }
+  const curTitle = (code) => (code === "MYR" ? "Ringgit (RM)" : code === "KRW" ? "Won (₩)" : code);
+  const fmtDay = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   function renderAssets() {
     const codes = curOrder();
     // net worth per currency, never mixed
@@ -668,20 +769,148 @@
       el("div", { class: "muted small", text: `Net worth (${SYM[code] || code})` }),
       el("div", { class: "num kpi-v", text: money(A.totals[code] ?? 0, code) }),
       el("div", { class: "muted small", text: `${A.list.filter((a) => a.currency === code).length} asset${A.list.filter((a) => a.currency === code).length === 1 ? "" : "s"}` }))));
+    renderAssetTrends();
     if (!A.list.length) {
       $("asset-groups").replaceChildren(el("section", { class: "panel empty" },
         el("p", { class: "muted", text: "Track what you own: savings accounts, ASB, gold, stocks and more. Tap + Add asset." })));
       return;
     }
-    $("asset-groups").replaceChildren(...codes.filter((code) => A.list.some((a) => a.currency === code)).map((code) =>
-      el("section", { class: "panel" }, el("h2", { text: code === "MYR" ? "Ringgit (RM)" : code === "KRW" ? "Won (₩)" : code }),
-        el("ul", { class: "tx-list asset-list" }, ...A.list.filter((a) => a.currency === code).map((a) =>
-          el("li", { class: "asset-row", tabindex: "0", role: "button", "aria-label": `Edit ${a.name || a.category}`,
-                     onclick: () => openAsset(a), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAsset(a); } } },
-            el("div", { class: "t-main" },
-              el("div", { class: "t1", text: a.name || a.category }),
-              el("div", { class: "t2", text: [a.name ? a.category : null, a.value_date ? "updated " + a.value_date : null, a.notes].filter(Boolean).join(" · ") })),
-            el("div", { class: "amt num", text: money(a.value, a.currency) })))))));
+    // per currency: one collapsible row per asset category, with its total; tap to see the assets inside
+    $("asset-groups").replaceChildren(...codes.filter((code) => A.list.some((a) => a.currency === code)).map((code) => {
+      const inCur = A.list.filter((a) => a.currency === code);
+      const cats = [...new Set(inCur.map((a) => a.category))].sort((a, b) => assetCatNames().indexOf(a) - assetCatNames().indexOf(b));
+      return el("section", { class: "panel" },
+        el("div", { class: "group-head" }, el("h2", { text: curTitle(code) }), el("span", { class: "num muted", text: money(A.totals[code] ?? 0, code) })),
+        el("div", { class: "acc" }, ...cats.map((cat) => {
+          const items = inCur.filter((a) => a.category === cat), key = `${code}|${cat}`, open = A.open.has(key);
+          const total = items.reduce((t, a) => t + Number(a.value || 0), 0);
+          const body = el("ul", { class: "tx-list asset-list acc-body", id: "acc-" + btoa(unescape(encodeURIComponent(key))).replace(/=/g, "") }, ...items.map(assetRow));
+          body.hidden = !open;
+          const head = el("button", { type: "button", class: "acc-head", "aria-expanded": String(open), "aria-controls": body.id,
+            onclick: () => {
+              const now = !A.open.has(key);
+              now ? A.open.add(key) : A.open.delete(key);
+              store.set("assetOpen", [...A.open]);
+              head.setAttribute("aria-expanded", String(now)); body.hidden = !now;
+            } },
+            el("span", { class: "chev", "aria-hidden": "true", text: "›" }),
+            el("span", { class: "acc-name" }, el("span", { class: "t1", text: cat }),
+              el("span", { class: "t2", text: `${items.length} asset${items.length === 1 ? "" : "s"}` })),
+            el("span", { class: "amt num", text: money(total, code) }));
+          return el("div", { class: "acc-item" }, head, body);
+        })));
+    }));
+  }
+  // one asset inside an expanded category: name, details, value, and its recent value history
+  function assetRow(a) {
+    // earlier values (the current one is already shown on the right)
+    const hist = A.history.filter((h) => h.asset_id === a.asset_id && h.date !== a.value_date).slice(-3).reverse();
+    const short = (d) => (d.slice(0, 4) === todayLocal().slice(0, 4) ? fmtDay(d).replace(/ \d{4}$/, "") : fmtDay(d));
+    const sub = [a.value_date ? "updated " + fmtDay(a.value_date) : null, a.notes].filter(Boolean).join(" · ");
+    return el("li", { class: "asset-row", tabindex: "0", role: "button", "aria-label": `Edit ${a.name || a.category}`,
+                      onclick: () => openAsset(a), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAsset(a); } } },
+      el("div", { class: "t-main" },
+        el("div", { class: "t1", text: a.name || a.category }),
+        el("div", { class: "t2", text: sub }),
+        ...(hist.length ? [el("div", { class: "t3", text: "Before: " + hist.map((h) => `${short(h.date)} ${money(h.value, a.currency)}`).join(" · ") })] : [])),
+      el("div", { class: "amt num", text: money(a.value, a.currency) }));
+  }
+
+  // ---- 3-month trend: one line chart per currency, side by side ----
+  // Value on a day = each asset's latest value dated on or before that day (an asset counts from its
+  // first value). Drawn as steps, because values only change when you update them.
+  function assetSeries(code, cat, start, end) {
+    const assets = A.list.filter((a) => a.currency === code && (!cat || a.category === cat));
+    const ids = new Set(assets.map((a) => a.asset_id));
+    const hist = A.history.filter((h) => ids.has(h.asset_id));
+    const valueOn = (day) => {
+      let t = 0;
+      for (const id of ids) {
+        let v = null;
+        for (const h of hist) if (h.asset_id === id && h.date <= day) v = Number(h.value);
+        if (v !== null) t += v;
+      }
+      return t;
+    };
+    // the line begins when there is something to show: the window start, or the first value logged inside it
+    const firstLogged = hist.length ? hist.reduce((m, h) => (h.date < m ? h.date : m), hist[0].date) : end;
+    const from = firstLogged > start ? (firstLogged > end ? end : firstLogged) : start;
+    const days = [...new Set([from, ...hist.map((h) => h.date).filter((d) => d > from && d <= end), end])].sort();
+    return { has: assets.length > 0, from, points: days.map((d) => ({ d, v: valueOn(d) })) };
+  }
+  function renderAssetTrends() {
+    const panel = $("asset-trend-panel");
+    panel.hidden = !A.list.length;
+    if (!A.list.length) return;
+    // filter: total net worth, or one category (only categories that hold assets)
+    const sel = $("asset-trend-cat"), keep = sel.value;
+    const used = assetCatNames().filter((n) => A.list.some((a) => a.category === n));
+    sel.replaceChildren(sel.options[0], ...used.map((n) => el("option", { value: n, text: n })));
+    sel.value = used.includes(keep) ? keep : "";
+    const cat = sel.value || null;
+    const today = todayLocal(), t = new Date(today + "T00:00:00");
+    const start = new Date(t.getFullYear(), t.getMonth() - 2, 1);
+    const startStr = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-01`;
+    $("asset-trends").replaceChildren(...curOrder().map((code) => assetTrendCard(code, cat, startStr, today)));
+  }
+  $("asset-trend-cat").addEventListener("change", renderAssetTrends);
+  function assetTrendCard(code, cat, start, end) {
+    const { has, points, from } = assetSeries(code, cat, start, end);
+    const card = el("div", { class: "trend-card" });
+    const head = el("div", { class: "trend-card-head" });
+    card.append(el("div", { class: "muted small", text: `${SYM[code] || code}${cat ? " · " + cat : ""}` }), head);
+    if (!has) { head.append(el("div", { class: "muted small trend-empty", text: cat ? `No ${cat} in ${SYM[code] || code}` : `No ${SYM[code] || code} assets` })); return card; }
+    const first = points[0].v, last = points[points.length - 1].v, diff = last - first;
+    const showHead = (p, isEnd) => head.replaceChildren(
+      el("div", { class: "num trend-v", text: money(p.v, code) }),
+      el("div", { class: "small " + (isEnd ? (diff > 0 ? "inc" : diff < 0 ? "neg" : "muted") : "muted"),
+        text: isEnd ? `${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${compactMoney(Math.abs(diff), code)} since ${from === start ? new Date(start + "T00:00:00").toLocaleString("en", { month: "short" }) : fmtDay(from).replace(/ \d{4}$/, "")}` : fmtDay(p.d) }));
+    showHead(points[points.length - 1], true);
+    // geometry
+    const W = 300, H = 130, pl = 4, pr = 4, pt = 10, pb = 20;
+    const t0 = Date.parse(start), t1 = Date.parse(end) || t0 + 1, span = Math.max(1, t1 - t0);
+    const x = (d) => pl + (W - pl - pr) * ((Date.parse(d) - t0) / span);
+    let lo = Math.min(...points.map((p) => p.v)), hi = Math.max(...points.map((p) => p.v));
+    if (hi === lo) { const pad = hi ? Math.abs(hi) * 0.1 : 1; lo -= pad; hi += pad; } else { const pad = (hi - lo) * 0.12; lo -= pad; hi += pad; }
+    const y = (v) => pt + (H - pt - pb) * (1 - (v - lo) / (hi - lo));
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${SYM[code] || code} ${cat || "net worth"}, last 3 months` });
+    // month gridlines + labels (recessive)
+    const sd = new Date(start + "T00:00:00");
+    for (let i = 0; i < 3; i++) {
+      const m = new Date(sd.getFullYear(), sd.getMonth() + i, 1);
+      const ds = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}-01`, xx = x(ds);
+      svg.append(svgEl("line", { x1: xx.toFixed(1), x2: xx.toFixed(1), y1: pt, y2: H - pb, class: "grid" }));
+      const tx = svgEl("text", { x: (xx + 3).toFixed(1), y: H - 6 }); tx.textContent = m.toLocaleString("en", { month: "short" }); svg.append(tx);
+    }
+    // step line
+    let d = `M${x(points[0].d).toFixed(1)},${y(points[0].v).toFixed(1)}`;
+    for (let i = 1; i < points.length; i++) d += ` H${x(points[i].d).toFixed(1)} V${y(points[i].v).toFixed(1)}`;
+    const line = svgEl("path", { d, class: "nw-line", fill: "none" });
+    svg.append(line);
+    const dot = svgEl("circle", { r: 4.5, class: "nw-dot", cx: x(points[points.length - 1].d).toFixed(1), cy: y(last).toFixed(1) });
+    const cross = svgEl("line", { y1: pt, y2: H - pb, class: "cross", visibility: "hidden" });
+    svg.append(cross, dot);
+    // hover / drag: crosshair + the value on that day in the header
+    const pick = (ev) => {
+      const r = svg.getBoundingClientRect(), px = ((ev.clientX - r.left) / r.width) * W;
+      const day = new Date(t0 + span * Math.min(1, Math.max(0, (px - pl) / (W - pl - pr))));
+      const ds = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+      let p = points[0]; for (const q of points) if (q.d <= ds) p = q;
+      const at = { d: ds, v: p.v };
+      cross.setAttribute("x1", x(ds).toFixed(1)); cross.setAttribute("x2", x(ds).toFixed(1)); cross.setAttribute("visibility", "visible");
+      dot.setAttribute("cx", x(ds).toFixed(1)); dot.setAttribute("cy", y(at.v).toFixed(1));
+      showHead(at, false);
+    };
+    const reset = () => {
+      cross.setAttribute("visibility", "hidden");
+      dot.setAttribute("cx", x(points[points.length - 1].d).toFixed(1)); dot.setAttribute("cy", y(last).toFixed(1));
+      showHead(points[points.length - 1], true);
+    };
+    svg.addEventListener("pointermove", pick);
+    svg.addEventListener("pointerdown", pick);
+    svg.addEventListener("pointerleave", reset);
+    card.append(svg);
+    return card;
   }
   function setAssetCur(code) {
     A.ctx.currency = code;
@@ -747,6 +976,11 @@
     $("asset-name").value = a?.name ?? "";
     $("asset-notes").value = a?.notes ?? "";
     $("asset-value").value = a?.value != null ? groupDigits(Number(a.value).toFixed(decimals(a.currency)), a.currency) : "";
+    // date the value applies to: today by default. Editing: a new value is added on this date (history kept);
+    // changing only the date moves the last update to that date.
+    $("asset-date").value = todayLocal(); $("asset-date").max = todayLocal();
+    A.ctx.dateDefault = todayLocal();
+    $("asset-date-hint").textContent = a?.value_date ? `Last updated ${fmtDay(a.value_date)}` : "";
     setAssetCur(A.ctx.currency);
     renderAssetCats();
     $("asset-save").textContent = a ? "Save" : "Add";
@@ -773,16 +1007,20 @@
     if (!category) { $("asset-err").textContent = "Pick an asset category (or tap + to add one)."; $("asset-err").hidden = false; return; }
     if (value === "" || !(Number(value) >= 0)) { $("asset-err").textContent = "Enter the current value (0 or more)."; $("asset-err").hidden = false; $("asset-value").focus(); return; }
     const name = $("asset-name").value.trim(), notes = $("asset-notes").value.trim();
+    const date = $("asset-date").value || todayLocal();
+    if (date > todayLocal()) { $("asset-err").textContent = "The date can't be in the future."; $("asset-err").hidden = false; return; }
     $("asset-save").disabled = true;
     try {
       if (!A.ctx.id) {
-        await api("POST", "/assets", { category, value, currency: A.ctx.currency, ...(name ? { name } : {}), ...(notes ? { notes } : {}) });
+        await api("POST", "/assets", { category, value, currency: A.ctx.currency, date,
+                                       ...(name ? { name } : {}), ...(notes ? { notes } : {}) });
       } else {
         const o = A.ctx.original, body = {};
         if (category !== o.category) body.category = category;
         if (name !== (o.name ?? "")) body.name = name;
         if (notes !== (o.notes ?? "")) body.notes = notes;
-        if (Number(value) !== Number(o.value)) body.value = value;
+        if (Number(value) !== Number(o.value)) { body.value = value; body.date = date; }
+        else if (date !== A.ctx.dateDefault && o.value_date && date !== o.value_date) { body.date = date; body.move_from = o.value_date; }
         if (Object.keys(body).length) await api("PATCH", `/assets/${A.ctx.id}`, body);
       }
       $("asset-dlg").close();
