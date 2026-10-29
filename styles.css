@@ -243,3 +243,24 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
 
 /* the hidden attribute always wins over display rules */
 [hidden] { display: none !important; }
+
+/* live amount: grows with its digits */
+.amount { width: 4.2ch; max-width: 100%; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* assets / net worth */
+.screen-title { font-size: 24px; margin: 4px 0; letter-spacing: -0.01em; }
+.add-btn {
+  border: 0; background: var(--ink); color: var(--bg); border-radius: 999px;
+  min-height: 40px; padding: 0 16px; font-weight: 650; font-size: 15px;
+}
+.networth { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 8px 0 0; }
+.networth .kpi-v { font-size: clamp(18px, 5.6vw, 26px); }
+.asset-row { cursor: pointer; }
+.asset-row:active { background: var(--bg); }
+.asset-list li:last-child { border-bottom: 0; }
+.panel.empty p { margin: 4px 0; }
+#asset-cat-chips { margin-bottom: 4px; }
+#asset-cat-chips button { min-height: 36px; padding: 6px 12px; font-size: 14px; }
+#asset-cur-wrap.locked .seg button:not([aria-checked="true"]) { opacity: .35; pointer-events: none; }
+#asset-dlg { max-height: 92vh; overflow-y: auto; }

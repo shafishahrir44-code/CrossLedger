@@ -45,6 +45,34 @@
     const sym = SYM[cur] ?? cur + " ";
     return `${n < 0 ? "−" : sign && n > 0 ? "+" : ""}${sym}${cur === "MYR" ? " " : ""}${s}`;
   }
+  // Live thousand separators while typing (204800 -> 204,800). Commas are
+  // stripped again before sending; KRW has no decimals.
+  const plain = (v) => String(v ?? "").replace(/,/g, "").trim();
+  function groupDigits(raw, cur) {
+    let v = String(raw).replace(/[^\d.]/g, "");
+    const d = decimals(cur);
+    const dot = v.indexOf(".");
+    let int = dot < 0 ? v : v.slice(0, dot), frac = dot < 0 ? null : v.slice(dot + 1).replace(/\./g, "");
+    int = int.replace(/^0+(?=\d)/, "");
+    if (!d) frac = null; else if (frac !== null) frac = frac.slice(0, d);
+    const g = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return frac === null ? g : `${g || "0"}.${frac}`;
+  }
+  function formatInput(input, cur) {
+    const before = input.value, caret = input.selectionStart ?? before.length;
+    const sig = before.slice(0, caret).replace(/[^\d.]/g, "").length;   // digits (and dot) left of the caret
+    const after = groupDigits(before, cur);
+    if (after !== before) {
+      input.value = after;
+      let pos = 0, seen = 0;
+      while (pos < after.length && seen < sig) { if (/[\d.]/.test(after[pos])) seen++; pos++; }
+      try { input.setSelectionRange(pos, pos); } catch { /* not focusable */ }
+    }
+    if (input.id === "amount") {   // the big amount grows with its digits so 1,234,567 never clips
+      const digits = after.replace(/[^\d]/g, "").length, marks = after.length - digits;
+      input.style.width = Math.max(4.2, digits + marks * 0.5 + 0.4) + "ch";
+    }
+  }
   const todayLocal = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
   // ---------- API ----------
@@ -85,7 +113,7 @@
 
   // ---------- tabs ----------
   function showTab(tab) {
-    for (const t of ["add", "dash"]) $(t).hidden = t !== tab;
+    for (const t of ["add", "dash", "assets"]) $(t).hidden = t !== tab;
     for (const b of document.querySelectorAll("#tabs button")) b.setAttribute("aria-current", b.dataset.tab === tab ? "page" : "false");
     clearInterval(S.dashTimer);
     if (tab === "dash") {
@@ -93,6 +121,7 @@
       // Poll while the dashboard is open and visible: near-real-time on the phone.
       S.dashTimer = setInterval(() => { if (document.visibilityState === "visible") loadDash(true); }, 15000);
     }
+    if (tab === "assets") loadAssets();
     history.replaceState(null, "", "?tab=" + tab);
   }
   document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -104,7 +133,7 @@
     return m;
   }
   function showSetup(err) {
-    $("setup").hidden = false; $("add").hidden = true; $("dash").hidden = true; $("tabs").hidden = true;
+    $("setup").hidden = false; $("add").hidden = true; $("dash").hidden = true; $("assets").hidden = true; $("tabs").hidden = true;
     $("setup-url").value = S.api;
     if (err) { $("setup-error").textContent = err; $("setup-error").hidden = false; }
   }
@@ -137,6 +166,10 @@
   function renderCurrency() {
     $("amount-sym").textContent = SYM[S.currency] || S.currency;
     $("amount").placeholder = decimals(S.currency) ? "0.00" : "0";
+    $("amount").setAttribute("inputmode", decimals(S.currency) ? "decimal" : "numeric");
+    formatInput($("amount"), S.currency);
+    // each currency has its own categories and payment methods
+    renderType();
     renderBanks();
   }
   // Chips for a user-managed list, ending with a "+" chip. In edit mode a tap opens the editor.
@@ -154,19 +187,27 @@
     chips.push(el("button", { type: "button", class: "chip-add", "aria-label": addLabel, text: "+", onclick: onAdd }));
     container.replaceChildren(...chips);
   }
+  // Categories / payment methods of the active currency only (RM and ₩ lists are separate).
+  const inCur = (x) => !x.currency || x.currency === S.currency;
+  const curCats = () => S.meta.categories.filter(inCur);
+  const findCat = (name) => curCats().find((c) => c.name === name);
   function catsForType() {
-    return S.meta.categories.filter((c) => c.kind === S.type || c.kind === "both").map((c) => c.name);
+    return curCats().filter((c) => c.kind === S.type || c.kind === "both").map((c) => c.name);
   }
+  function banksForCur() {
+    return S.meta.payment_methods ? S.meta.payment_methods.filter(inCur).map((b) => b.name) : S.meta.banks;
+  }
+  const catKey = () => `cat.${S.currency}.${S.type}`;
   function renderType() {
     document.body.classList.toggle("is-income", S.type === "income");
     for (const b of document.querySelectorAll('#add .seg button[data-type]')) b.setAttribute("aria-checked", String(b.dataset.type === S.type));
     $("save").textContent = S.type === "income" ? "Save income" : "Save expense";
     const cats = catsForType();
-    if (!cats.includes(S.category)) S.category = store.get("cat." + S.type, cats[0]);
+    if (!cats.includes(S.category)) S.category = store.get(catKey(), cats[0]);
     if (!cats.includes(S.category)) S.category = cats[0] ?? null;
     renderPickList($("cat-chips"), cats, S.category, {
       editing: S.editCats,
-      onPick: (c) => { S.category = c; store.set("cat." + S.type, c); $("form-err").hidden = true; },
+      onPick: (c) => { S.category = c; store.set(catKey(), c); $("form-err").hidden = true; },
       onEdit: (c) => openItem("cat", c),
       onAdd: () => openItem("cat", null),
       addLabel: "Add category",
@@ -174,11 +215,11 @@
     const hint = $("cat-hint");
     hint.hidden = cats.length > 0 && !S.editCats;
     hint.textContent = S.editCats ? "Tap a category to rename it, change its type or remove it."
-      : `Tap + to add your first ${S.type} category.`;
-    $("cat-edit").hidden = S.meta.categories.length === 0;
+      : `Tap + to add your first ${SYM[S.currency] || S.currency} ${S.type} category.`;
+    $("cat-edit").hidden = curCats().length === 0;
   }
   function renderBanks() {
-    const banks = S.meta.banks;
+    const banks = banksForCur();
     let cur = S.bankByCur[S.currency];
     if (!banks.includes(cur)) cur = banks[0] ?? null;
     S.bankByCur[S.currency] = cur;
@@ -192,7 +233,8 @@
     const hint = $("bank-hint");
     hint.hidden = banks.length > 0 && !S.editBanks;
     hint.textContent = S.editBanks ? "Tap a payment method to rename or remove it."
-      : "Tap + to add a payment method, e.g. Cash, KakaoBank, Maybank card.";
+      : (S.currency === "KRW" ? "Tap + to add a ₩ payment method, e.g. Cash, KakaoBank, T-money."
+        : `Tap + to add a ${SYM[S.currency] || S.currency} payment method, e.g. Cash, Maybank, Touch 'n Go.`);
     $("bank-edit").hidden = banks.length === 0;
   }
   function toggleEdit(which) {
@@ -222,7 +264,7 @@
     // returns [{currency, amount|null}] for inputs that differ from what's saved
     if (itemCtx.list !== "cat" || itemCtx.kind === "income") return [];
     const out = [];
-    for (const c of S.meta.currencies) {
+    for (const c of S.meta.currencies.filter((c) => c.code === itemCtx.currency)) {
       const raw = ($(`item-budget-${c.code}`)?.value || "").replace(/,/g, "").trim();
       const before = itemCtx.budgets?.[c.code];
       const was = before === undefined || before === null ? null : Number(before);
@@ -234,20 +276,23 @@
   }
   for (const b of $("item-kind").children) b.addEventListener("click", () => setItemKind(b.dataset.kind));
   function openItem(list, name) {
+    if (list === "acat") return openAssetCat(name);
     const isCat = list === "cat";
-    const existing = isCat && name ? S.meta.categories.find((c) => c.name === name) : null;
-    itemCtx = { list, original: name, kind: existing ? existing.kind : S.type };
-    $("item-title").textContent = (name ? "Edit " : "New ") + (isCat ? "category" : "payment method");
+    const existing = isCat && name ? findCat(name) : null;
+    itemCtx = { list, original: name, kind: existing ? existing.kind : S.type, currency: S.currency };
+    const sym = SYM[S.currency] || S.currency;
+    $("item-title").textContent = (name ? "Edit " : "New ") + sym + " " + (isCat ? "category" : "payment method");
     $("item-name").value = name || "";
     $("item-name").placeholder = isCat ? (S.type === "income" ? "e.g. Allowance" : "e.g. Food") : "e.g. Cash, KakaoBank";
     $("item-kind-wrap").hidden = !isCat;
     if (isCat) setItemKind(itemCtx.kind);
     itemCtx.budgets = existing?.budgets || {};
-    $("item-budgets").replaceChildren(...S.meta.currencies.map((c) => {
+    $("item-budgets").replaceChildren(...S.meta.currencies.filter((c) => c.code === S.currency).map((c) => {
       const cur = existing?.budgets?.[c.code];
       const input = el("input", { id: `item-budget-${c.code}`, inputmode: c.minor_units ? "decimal" : "numeric",
         placeholder: "No budget", autocomplete: "off", "aria-label": `Monthly budget in ${c.code}` });
-      if (cur !== undefined && cur !== null) input.value = String(Number(cur));
+      if (cur !== undefined && cur !== null) input.value = groupDigits(Number(cur).toFixed(c.minor_units), c.code);
+      input.addEventListener("input", () => formatInput(input, c.code));
       return el("label", { class: "budget-input" }, el("span", { text: SYM[c.code] || c.code }), input);
     }));
     showBudgetFields();
@@ -272,10 +317,10 @@
   }
   async function afterListChange(list, selectName, message) {
     await loadMeta();
-    if (list === "cat" && S.editCats && S.meta.categories.length === 0) toggleEdit("cat");
-    if (list === "bank" && S.editBanks && S.meta.banks.length === 0) toggleEdit("bank");
+    if (list === "cat" && S.editCats && curCats().length === 0) toggleEdit("cat");
+    if (list === "bank" && S.editBanks && banksForCur().length === 0) toggleEdit("bank");
     if (list === "cat") {
-      if (selectName && catsForType().includes(selectName)) { S.category = selectName; store.set("cat." + S.type, selectName); }
+      if (selectName && catsForType().includes(selectName)) { S.category = selectName; store.set(catKey(), selectName); }
       renderType();
     } else {
       if (selectName) { S.bankByCur[S.currency] = selectName; store.set("bankByCur", S.bankByCur); }
@@ -290,16 +335,23 @@
     e.preventDefault();
     const name = $("item-name").value.replace(/\s+/g, " ").trim();
     if (!name) { $("item-err").textContent = "Enter a name."; $("item-err").hidden = false; return; }
-    const { list, original, kind } = itemCtx;
+    const { list, original, kind, currency } = itemCtx;
     const path = list === "cat" ? "/categories" : "/payment-methods";
     $("item-save").disabled = true;
     try {
       let r = null;
-      const existing = list === "cat" && original ? S.meta.categories.find((c) => c.name === original) : null;
+      const existing = list === "cat" && original ? findCat(original) : null;
       const catChanged = !original || name !== original || (list === "cat" && existing && existing.kind !== kind);
-      if (!original) r = await api("POST", path, list === "cat" ? { name, kind } : { name });
-      else if (list === "cat" && catChanged) r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind });
-      else if (list === "bank" && name !== original) r = await api("PATCH", path, { name: original, new_name: name });
+      if (list === "acat") {
+        if (!original) r = await api("POST", "/asset-categories", { name });
+        else if (name !== original) r = await api("PATCH", "/asset-categories", { name: original, new_name: name });
+        $("item-dlg").close();
+        if (r) await afterAssetCatChange(original, r.asset_category.name, r.message);
+        return;
+      }
+      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency } : { name, currency });
+      else if (list === "cat" && catChanged) r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind, currency });
+      else if (list === "bank" && name !== original) r = await api("PATCH", path, { name: original, new_name: name, currency });
       const saved = r ? (r.category || r.payment_method).name : original;
       if (r) {
         // from here on, edits apply to the saved item (so a budget error can be fixed without re-adding)
@@ -330,9 +382,17 @@
       rm.textContent = `Tap again to remove "${itemCtx.original}"`;
       return;
     }
-    const { list, original } = itemCtx;
+    const { list, original, currency } = itemCtx;
+    if (list === "acat") {
+      try {
+        const r = await api("DELETE", "/asset-categories", { name: original });
+        $("item-dlg").close();
+        await afterAssetCatChange(original, null, r.message);
+      } catch (err) { itemError(err); }
+      return;
+    }
     try {
-      const r = await api("DELETE", list === "cat" ? "/categories" : "/payment-methods", { name: original });
+      const r = await api("DELETE", list === "cat" ? "/categories" : "/payment-methods", { name: original, currency });
       $("item-dlg").close();
       await afterListChange(list, null, r.message);
     } catch (err) { itemError(err); }
@@ -345,7 +405,7 @@
       request_id: S.requestId,
       type: S.type,
       item: $("item").value.trim() || S.category || "",
-      amount: $("amount").value.trim(),
+      amount: plain($("amount").value),
       category: S.category,
       currency: S.currency,
       which_bank: S.bankByCur[S.currency],
@@ -373,7 +433,7 @@
     e.preventDefault();
     const body = readForm();
     $("amount-err").hidden = true; $("form-err").hidden = true;
-    if (!body.amount || !(Number(body.amount.replace(/,/g, "")) > 0)) {
+    if (!body.amount || !(Number(body.amount) > 0)) {
       $("amount-err").textContent = "Enter an amount above zero.";
       $("amount-err").hidden = false; $("amount").focus(); return;
     }
@@ -387,7 +447,7 @@
     try {
       const r = await api("POST", "/transactions", body);
       S.lastSavedId = r.transaction.transaction_id;
-      toast(r.message, { undo: !r.duplicate, ms: 6000 });
+      toast("Logged successfully", { undo: !r.duplicate, ms: 5000 });
       resetForm();
       loadRecent();
     } catch (err) {
@@ -403,7 +463,8 @@
     } finally { $("save").disabled = false; }
   });
   function resetForm() {
-    $("amount").value = ""; $("item").value = ""; $("notes").value = ""; $("date").value = todayLocal();
+    $("amount").value = ""; formatInput($("amount"), S.currency);
+    $("item").value = ""; $("notes").value = ""; $("date").value = todayLocal();
     S.requestId = uuid();
   }
 
@@ -512,23 +573,22 @@
     $("meter-today").hidden = !isNow;
     if (isNow) $("meter-today").style.left = ((new Date().getDate() / days) * 100).toFixed(1) + "%";
 
-    // by category: bars show % of the category budget where there is one, otherwise share of the biggest spend
+    // by category: with a budget the bar and the value show % of that budget used;
+    // without one, the bar is the share of the biggest spend and the value is the amount
     const maxC = Math.max(1, ...s.by_category.map((c) => Number(c.amount)));
     const fill = (pct) => { const i = document.createElement("i"); i.style.width = Math.min(100, Math.max(0, pct)).toFixed(1) + "%"; return i; };
     $("ch-cat").replaceChildren(s.by_category.length
       ? el("div", { class: "bars" }, ...s.by_category.map((c) => {
           const hasB = c.budget !== null && c.budget !== undefined;
-          const sub = !hasB ? null : c.over
-            ? `${f(-Number(c.remaining))} over ${f(c.budget)} budget`
-            : `${f(c.remaining)} left of ${f(c.budget)}`;
-          return el("div", { class: "bar-row" + (hasB && c.over ? " over" : "") },
-            el("span", { class: "cat-name" }, el("span", { text: c.category }), ...(sub ? [el("span", { class: "cat-sub", text: sub })] : [])),
-            el("span", { class: "bar-track" + (hasB ? " has-budget" : ""), title: hasB ? `${Number(c.used_pct).toFixed(0)}% of budget used` : "" },
-              fill(hasB ? Number(c.used_pct) : Number(c.amount) / maxC * 100)),
-            el("span", { class: "num", text: f(c.amount) }));
+          const pct = hasB ? Number(c.used_pct) : null;
+          return el("div", { class: "bar-row" + (hasB && c.over ? " over" : ""),
+                             title: hasB ? `${f(c.amount)} of ${f(c.budget)}` : f(c.amount) },
+            el("span", { class: "cat-name", text: c.category }),
+            el("span", { class: "bar-track" + (hasB ? " has-budget" : "") },
+              fill(hasB ? pct : Number(c.amount) / maxC * 100)),
+            el("span", { class: "num", text: hasB ? `${pct.toFixed(1)}% used` : f(c.amount) }));
         }))
       : el("p", { class: "muted small", text: "No spending this month yet." }));
-    $("cat-note").hidden = !s.by_category.some((c) => c.budget !== null && c.budget !== undefined);
 
     $("ch-daily").innerHTML = svgBars(s.daily.map((d) => Number(d.expenses)), s.daily.map((d) => String(Number(d.date.slice(8)))), { fmt: f });
     const months = s.monthly.map((x) => x.month.slice(2).replace("-", "/"));
@@ -563,6 +623,7 @@
   $("budget-btn").addEventListener("click", () => {
     $("budget-title").textContent = `Monthly budget (${S.dashCurrency})`;
     $("budget-amt").value = ""; $("budget-err").hidden = true;
+    $("budget-amt").setAttribute("inputmode", decimals(S.dashCurrency) ? "decimal" : "numeric");
     $("budget-dlg").showModal();
   });
   $("budget-form").addEventListener("submit", async (e) => {
@@ -570,11 +631,176 @@
     e.preventDefault();
     try {
       await api("PUT", "/budget", {
-        currency: S.dashCurrency, amount: $("budget-amt").value.trim(),
+        currency: S.dashCurrency, amount: plain($("budget-amt").value),
         ...($("budget-only-month").checked ? { month: $("month").value } : {}),
       });
       $("budget-dlg").close(); toast("Budget saved."); loadDash();
     } catch (err) { $("budget-err").textContent = err.message; $("budget-err").hidden = false; }
+  });
+
+  $("budget-amt").addEventListener("input", () => formatInput($("budget-amt"), S.dashCurrency));
+  $("amount").addEventListener("input", () => formatInput($("amount"), S.currency));
+
+  // ---------- assets / net worth ----------
+  // asset categories are a user-managed list (shared by RM and ₩): + to add, Edit to rename / remove
+  const A = { list: [], totals: {}, categories: [], ctx: null, editCats: false };
+  const assetCatNames = () => A.categories.map((c) => (typeof c === "string" ? c : c.name));
+  const curOrder = () => S.meta.currencies.map((c) => c.code).sort((a, b) => (a === "MYR" ? -1 : b === "MYR" ? 1 : a.localeCompare(b)));
+  async function loadAssets(silent = false) {
+    try {
+      const r = await api("GET", "/assets");
+      A.list = r.assets; A.totals = r.totals; A.categories = r.categories;
+      renderAssets();
+      $("assets-updated").textContent = A.list.length ? "Values are what you last entered. Tap an asset to update it." : "";
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
+      if (e instanceof ApiError && e.status === 404) {
+        $("asset-groups").replaceChildren(el("p", { class: "muted small", text: "Your server needs this update first: run scripts\\deploy.ps1 on your laptop." }));
+        return;
+      }
+      if (!silent) toast("Couldn't load assets: " + e.message, { bad: true });
+    }
+  }
+  function renderAssets() {
+    const codes = curOrder();
+    // net worth per currency, never mixed
+    $("networth").replaceChildren(...codes.map((code) => el("div", { class: "kpi" },
+      el("div", { class: "muted small", text: `Net worth (${SYM[code] || code})` }),
+      el("div", { class: "num kpi-v", text: money(A.totals[code] ?? 0, code) }),
+      el("div", { class: "muted small", text: `${A.list.filter((a) => a.currency === code).length} asset${A.list.filter((a) => a.currency === code).length === 1 ? "" : "s"}` }))));
+    if (!A.list.length) {
+      $("asset-groups").replaceChildren(el("section", { class: "panel empty" },
+        el("p", { class: "muted", text: "Track what you own: savings accounts, ASB, gold, stocks and more. Tap + Add asset." })));
+      return;
+    }
+    $("asset-groups").replaceChildren(...codes.filter((code) => A.list.some((a) => a.currency === code)).map((code) =>
+      el("section", { class: "panel" }, el("h2", { text: code === "MYR" ? "Ringgit (RM)" : code === "KRW" ? "Won (₩)" : code }),
+        el("ul", { class: "tx-list asset-list" }, ...A.list.filter((a) => a.currency === code).map((a) =>
+          el("li", { class: "asset-row", tabindex: "0", role: "button", "aria-label": `Edit ${a.name || a.category}`,
+                     onclick: () => openAsset(a), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAsset(a); } } },
+            el("div", { class: "t-main" },
+              el("div", { class: "t1", text: a.name || a.category }),
+              el("div", { class: "t2", text: [a.name ? a.category : null, a.value_date ? "updated " + a.value_date : null, a.notes].filter(Boolean).join(" · ") })),
+            el("div", { class: "amt num", text: money(a.value, a.currency) })))))));
+  }
+  function setAssetCur(code) {
+    A.ctx.currency = code;
+    for (const b of $("asset-cur").children) b.setAttribute("aria-checked", String(b.dataset.v === code));
+    $("asset-sym").textContent = SYM[code] || code;
+    $("asset-value").placeholder = decimals(code) ? "0.00" : "0";
+    $("asset-value").setAttribute("inputmode", decimals(code) ? "decimal" : "numeric");
+    formatInput($("asset-value"), code);
+  }
+  function renderAssetCats() {
+    const names = assetCatNames();
+    if (A.ctx && !names.includes(A.ctx.category)) A.ctx.category = null;
+    renderPickList($("asset-cat-chips"), names, A.ctx?.category ?? null, {
+      editing: A.editCats,
+      onPick: (n) => { A.ctx.category = n; $("asset-err").hidden = true; },
+      onEdit: (n) => openItem("acat", n),
+      onAdd: () => openItem("acat", null),
+      addLabel: "Add asset category",
+    });
+    const hint = $("asset-cat-hint");
+    hint.hidden = names.length > 0 && !A.editCats;
+    hint.textContent = A.editCats ? "Tap a category to rename or remove it. Only empty categories can be removed."
+      : "Tap + to add a category, e.g. Savings, ASB, Gold.";
+    $("asset-cat-edit").hidden = names.length === 0 && !A.editCats;
+    $("asset-cat-edit").textContent = A.editCats ? "Done" : "Edit";
+    $("asset-cat-edit").setAttribute("aria-pressed", String(A.editCats));
+    $("asset-cat-edit").closest(".field").classList.toggle("editing", A.editCats);
+  }
+  $("asset-cat-edit").addEventListener("click", () => { A.editCats = !A.editCats; renderAssetCats(); });
+  function openAssetCat(name) {
+    itemCtx = { list: "acat", original: name, kind: null, currency: null };
+    $("item-title").textContent = name ? "Edit asset category" : "New asset category";
+    $("item-name").value = name || "";
+    $("item-name").placeholder = "e.g. Tabung Haji, Unit trust";
+    $("item-kind-wrap").hidden = true;
+    $("item-budget-wrap").hidden = true;
+    $("item-save").textContent = name ? "Save" : "Add";
+    $("item-save").disabled = false;
+    $("item-err").hidden = true;
+    const rm = $("item-remove");
+    rm.hidden = !name; rm.classList.remove("confirm"); rm.dataset.armed = "";
+    rm.textContent = "Remove asset category";
+    $("item-dlg").showModal();
+    setTimeout(() => $("item-name").focus(), 50);
+  }
+  async function afterAssetCatChange(original, saved, message) {
+    if (A.ctx && original && A.ctx.category === original) A.ctx.category = saved;   // renamed (or removed -> null)
+    if (A.ctx && !original && saved) A.ctx.category = saved;                       // new one: select it
+    await loadAssets(true);
+    if (A.editCats && !assetCatNames().length) A.editCats = false;
+    if ($("asset-dlg").open) renderAssetCats();
+    toast(message);
+  }
+  function openAsset(a) {
+    A.ctx = { id: a?.asset_id ?? null, currency: a?.currency ?? (S.dashCurrency || S.currency), original: a ?? null,
+              category: a?.category ?? null };
+    A.editCats = false;
+    $("asset-title").textContent = a ? "Update asset" : "New asset";
+    $("asset-cur").replaceChildren(...curOrder().map((code) => el("button", {
+      type: "button", role: "radio", "data-v": code, text: SYM[code] || code, onclick: () => { if (!A.ctx.id) setAssetCur(code); },
+    })));
+    $("asset-cur-wrap").classList.toggle("locked", !!a);
+    $("asset-name").value = a?.name ?? "";
+    $("asset-notes").value = a?.notes ?? "";
+    $("asset-value").value = a?.value != null ? groupDigits(Number(a.value).toFixed(decimals(a.currency)), a.currency) : "";
+    setAssetCur(A.ctx.currency);
+    renderAssetCats();
+    $("asset-save").textContent = a ? "Save" : "Add";
+    $("asset-save").disabled = false;
+    $("asset-err").hidden = true;
+    const rm = $("asset-remove");
+    rm.hidden = !a; rm.classList.remove("confirm"); rm.dataset.armed = ""; rm.textContent = "Delete asset";
+    $("asset-dlg").showModal();
+    setTimeout(() => { if (a) $("asset-value").focus(); }, 50);
+  }
+  $("asset-add").addEventListener("click", () => openAsset(null));
+  $("asset-value").addEventListener("input", () => formatInput($("asset-value"), A.ctx?.currency || "MYR"));
+  function assetError(err) {
+    let msg = err.message;
+    if (err instanceof ApiError && err.status === 404 && /Route/.test(msg)) msg = "Your server needs this update first: run scripts\\deploy.ps1 on your laptop.";
+    else if (err.body?.error?.fields) msg = Object.entries(err.body.error.fields).map(([k, v]) => `${k} ${v}`).join(", ");
+    $("asset-err").textContent = msg; $("asset-err").hidden = false;
+  }
+  $("asset-form").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "save") { A.ctx = null; return; }
+    e.preventDefault();
+    const category = A.ctx.category;
+    const value = plain($("asset-value").value);
+    if (!category) { $("asset-err").textContent = "Pick an asset category (or tap + to add one)."; $("asset-err").hidden = false; return; }
+    if (value === "" || !(Number(value) >= 0)) { $("asset-err").textContent = "Enter the current value (0 or more)."; $("asset-err").hidden = false; $("asset-value").focus(); return; }
+    const name = $("asset-name").value.trim(), notes = $("asset-notes").value.trim();
+    $("asset-save").disabled = true;
+    try {
+      if (!A.ctx.id) {
+        await api("POST", "/assets", { category, value, currency: A.ctx.currency, ...(name ? { name } : {}), ...(notes ? { notes } : {}) });
+      } else {
+        const o = A.ctx.original, body = {};
+        if (category !== o.category) body.category = category;
+        if (name !== (o.name ?? "")) body.name = name;
+        if (notes !== (o.notes ?? "")) body.notes = notes;
+        if (Number(value) !== Number(o.value)) body.value = value;
+        if (Object.keys(body).length) await api("PATCH", `/assets/${A.ctx.id}`, body);
+      }
+      $("asset-dlg").close();
+      toast(A.ctx.id ? "Asset saved" : "Asset added");
+      A.ctx = null;
+      loadAssets(true);
+    } catch (err) { assetError(err); $("asset-save").disabled = false; }
+  });
+  $("asset-remove").addEventListener("click", async () => {
+    const rm = $("asset-remove");
+    if (!rm.dataset.armed) { rm.dataset.armed = "1"; rm.classList.add("confirm"); rm.textContent = "Tap again to delete"; return; }
+    try {
+      await api("DELETE", `/assets/${A.ctx.id}`);
+      $("asset-dlg").close(); A.ctx = null; toast("Asset deleted"); loadAssets(true);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) { $("asset-dlg").close(); A.ctx = null; loadAssets(true); }
+      else assetError(err);
+    }
   });
 
   // ---------- boot ----------
@@ -587,7 +813,8 @@
     $("date").value = todayLocal();
     $("month").value = todayLocal().slice(0, 7);
     renderCurrencySegs(); renderCurrency(); renderType();
-    const tab = new URLSearchParams(location.search).get("tab") === "dash" ? "dash" : "add";
+    const want = new URLSearchParams(location.search).get("tab");
+    const tab = ["dash", "assets"].includes(want) ? want : "add";
     showTab(tab);
     if (tab === "add") setTimeout(() => $("amount").focus(), 50);
     loadRecent(); flushQueue();
@@ -597,6 +824,7 @@
     if (document.visibilityState !== "visible") return;
     flushQueue();
     if (!$("dash").hidden) loadDash(true);
+    if (!$("assets").hidden) loadAssets(true);
   });
   if (!S.key || !S.api) showSetup(); else start();
 })();

@@ -48,7 +48,7 @@
     <form id="tx-form" autocomplete="off" novalidate>
       <label class="amount-wrap" for="amount">
         <span id="amount-sym" class="amount-sym">RM</span>
-        <input id="amount" class="amount" inputmode="decimal" placeholder="0" aria-label="Amount" enterkeyhint="next">
+        <input id="amount" class="amount" inputmode="decimal" placeholder="0" aria-label="Amount" enterkeyhint="next" autocomplete="off">
       </label>
       <p id="amount-err" class="error center" hidden></p>
 
@@ -70,12 +70,11 @@
       </div>
       <p id="form-err" class="error" role="alert" hidden></p>
 
+      <label class="field"><span>Date</span><input id="date" type="date"></label>
+
       <details class="more">
-        <summary>Date and notes</summary>
-        <div class="row">
-          <label class="field grow"><span>Date</span><input id="date" type="date"></label>
-        </div>
-        <label class="field"><span>Notes</span><textarea id="notes" maxlength="500" rows="2"></textarea></label>
+        <summary>Notes</summary>
+        <label class="field"><span class="sr-only">Notes</span><textarea id="notes" maxlength="500" rows="2" aria-label="Notes"></textarea></label>
       </details>
 
       <div class="savebar">
@@ -122,8 +121,7 @@
       <div class="kpi"><div class="muted small">Net</div><div id="k-net" class="num kpi-v">—</div></div>
     </div>
 
-    <section class="panel"><h2>Spending by category</h2><div id="ch-cat"></div>
-      <p class="muted small cat-note" id="cat-note" hidden>Where a category has a budget, its bar shows how much of that budget is used.</p></section>
+    <section class="panel"><h2>Spending by category</h2><div id="ch-cat"></div></section>
     <section class="panel"><h2>Daily spending</h2><div id="ch-daily" class="chart"></div></section>
     <section class="panel"><h2>Monthly spending vs budget</h2><div id="ch-month" class="chart"></div></section>
     <section class="panel"><h2>Income vs expenses</h2><div id="ch-ie" class="chart"></div></section>
@@ -146,9 +144,21 @@
     <p class="muted small center" id="updated">Not loaded yet</p>
   </section>
 
+  <!-- Assets / net worth -->
+  <section id="assets" class="screen" hidden>
+    <header class="topbar">
+      <h1 class="screen-title">Assets</h1>
+      <button type="button" class="add-btn" id="asset-add">+ Add asset</button>
+    </header>
+    <div class="networth" id="networth"></div>
+    <div id="asset-groups"></div>
+    <p class="muted small center" id="assets-updated"></p>
+  </section>
+
   <nav class="tabs" id="tabs" hidden>
     <button type="button" data-tab="add" aria-current="page">Add</button>
     <button type="button" data-tab="dash">Dashboard</button>
+    <button type="button" data-tab="assets">Assets</button>
   </nav>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden>
@@ -185,7 +195,6 @@
     <form method="dialog" id="del-form" class="stack">
       <h2>Delete this entry?</h2>
       <p id="del-what" class="del-what"></p>
-      <p class="muted small">This removes it from the database, the dashboard and Power BI. It can't be undone.</p>
       <p id="del-err" class="error" hidden></p>
       <div class="row">
         <button value="cancel" class="ghost" type="submit">Keep</button>
@@ -194,10 +203,35 @@
     </form>
   </dialog>
 
+  <dialog id="asset-dlg">
+    <form method="dialog" id="asset-form" class="stack" novalidate>
+      <h2 id="asset-title">New asset</h2>
+      <div class="field" id="asset-cur-wrap"><span id="asset-cur-label">Currency</span>
+        <div class="seg seg-wide" id="asset-cur" role="radiogroup" aria-labelledby="asset-cur-label"></div></div>
+      <div class="field">
+        <div class="field-head"><span id="asset-cat-label">Asset category</span>
+          <button type="button" class="link edit-link" id="asset-cat-edit" aria-pressed="false">Edit</button></div>
+        <div class="chips" id="asset-cat-chips" role="radiogroup" aria-labelledby="asset-cat-label"></div>
+        <p id="asset-cat-hint" class="muted small list-hint" hidden></p></div>
+      <label class="field"><span>Name <span class="optional">(optional)</span></span>
+        <input id="asset-name" maxlength="60" autocomplete="off" autocapitalize="words" placeholder="e.g. Maybank savings, Public Gold 10 g"></label>
+      <label class="field"><span>Current value</span>
+        <span class="budget-input"><span id="asset-sym">RM</span><input id="asset-value" inputmode="decimal" autocomplete="off" placeholder="0.00"></span></label>
+      <label class="field"><span>Notes <span class="optional">(optional)</span></span>
+        <textarea id="asset-notes" maxlength="500" rows="2"></textarea></label>
+      <p id="asset-err" class="error" hidden></p>
+      <div class="row">
+        <button value="cancel" formnovalidate class="ghost" type="submit">Cancel</button>
+        <button id="asset-save" class="primary" value="save" type="submit">Add</button>
+      </div>
+      <button type="button" id="asset-remove" class="remove-link" hidden>Delete asset</button>
+    </form>
+  </dialog>
+
   <dialog id="budget-dlg">
     <form method="dialog" id="budget-form" class="stack">
       <h2 id="budget-title">Monthly budget</h2>
-      <label class="field"><span>Amount</span><input id="budget-amt" inputmode="decimal" required></label>
+      <label class="field"><span>Amount</span><input id="budget-amt" inputmode="decimal" autocomplete="off" required></label>
       <label class="check"><input type="checkbox" id="budget-only-month"> Only for this month (otherwise it is the default for every month)</label>
       <p id="budget-err" class="error" hidden></p>
       <div class="row">
