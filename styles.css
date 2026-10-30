@@ -380,8 +380,6 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
   display: inline-block; font-size: 12px; font-weight: 600; line-height: 1; padding: 4px 8px; border-radius: 999px;
   color: var(--ink); background: color-mix(in srgb, var(--bc, var(--s-other)) 20%, var(--surface));
 }
-.badge-1 { --bc: var(--s1); } .badge-2 { --bc: var(--s2); } .badge-3 { --bc: var(--s8); }
-.badge-4 { --bc: var(--s7); } .badge-5 { --bc: var(--s5); } .badge-6 { --bc: var(--s-other); }
 
 .rem-tabs { margin-top: 12px; }
 .seg button[role="tab"][aria-selected="true"] { background: var(--ink); color: var(--bg); }
@@ -427,3 +425,12 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
 #rem-complete { min-height: 46px; }
 .rem-tabs button { padding: 8px 6px; white-space: nowrap; font-size: 14px; }
 .tab-badge { position: absolute; top: -7px; right: 2px; margin: 0; min-width: 16px; line-height: 16px; font-size: 10px; padding: 0 4px; box-shadow: 0 0 0 2px var(--bg); }
+
+.rem-logged { color: var(--inc); font-weight: 600; }
+.done-fill { border-top: 1px solid var(--line); padding-top: 10px; }
+.done-fill .field { margin: 0; }
+.done-fill p { margin: 0; }
+.done-log { margin: -2px 0 0; text-align: center; }
+.done-log:empty { display: none; }
+#done-dlg { max-height: 92vh; overflow-y: auto; }
+#rem-cat-hint { color: var(--over); }

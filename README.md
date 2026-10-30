@@ -21,8 +21,8 @@ Ringgit (RM) and Won (₩) are kept completely separate: their own categories, p
 | **Budgets that talk back** | A monthly budget per currency plus optional budgets per category. Bars show *% used* and turn red when you go over. |
 | **Live dashboard** | Spent / remaining meter, a category doughnut, budget bars and a 6-month stacked trend. Pick any month; it refreshes every 15 seconds while open. |
 | **Assets and net worth** | Savings accounts, ASB, gold, stocks, EPF… grouped by category with totals, a dated value history and RM / ₩ trend lines for the last 3 months. |
-| **Bill reminders with notifications** | Bills, subscriptions, debt instalments and top-ups, in RM or ₩, once or repeating (daily to yearly). The server sends a push notification at the time you pick (or 10 min to 1 day before), even when Ledger is closed. Tap it to open that reminder. |
-| **Reminders stay separate from spending** | A reminder never counts as an expense. When you pay, choose **Mark Complete & Create Expense** and the normal entry form opens pre-filled. Nothing is logged until you tap *Save expense*. |
+| **Bill reminders with notifications** | Bills, subscriptions, debt instalments and top-ups, filed under your own expense categories and payment methods (picking a ₩ category switches the reminder to ₩), once or repeating (daily to yearly). The server sends a push notification at the time you pick (or 10 min to 1 day before), even when Ledger is closed. Tap it to open that reminder. |
+| **One tap from reminder to expense** | A reminder never counts as spending on its own. When you pay, **Mark Complete & Create Expense** logs the expense straight away with the reminder's title, amount, currency, category, payment method and notes, dated the day you pay. If something is missing, such as the amount, Ledger asks for just that. |
 | **Works on a bad connection** | If the network drops, entries wait on the phone and send themselves later. A retried send can never create a duplicate. |
 | **Everywhere on the iPhone** | Installable Home Screen app, a Scriptable Home / Lock Screen widget (`LedgerWidget.js`), and an iOS Shortcut for Siri or a double tap on the back of the phone. |
 
@@ -34,6 +34,7 @@ Ringgit (RM) and Won (₩) are kept completely separate: their own categories, p
 </picture>
 
 - **Upcoming** on the dashboard shows the next 3 (overdue first), with *+ Reminder* and *View all*. The **Reminders** tab splits them into *Upcoming*, *Overdue* and *Completed*.
+- **Mark as Paid / Done?** offers *Just Mark Complete* or *Mark Complete & Create Expense*. A logged expense shows as *✓ Logged* under *Completed*, and the toast has an *Undo*.
 - **Repeating reminders** move on by themselves. Completing one schedules the next, and monthly ones keep their day (31 Jan → 28 Feb → 31 Mar). If you forget one, the next still arrives on time and the missed one waits under *Overdue*.
 - **Notifications on iPhone** need iOS 16.4 or later, with Ledger added to the Home Screen and opened from there. In a Safari tab, or if notifications are blocked, the app explains what to do and reminders still show in the app.
 
@@ -131,7 +132,8 @@ On first launch it asks for the **API address** and **API key**. It needs a runn
 | `POST` / `PATCH` / `DELETE` | `/asset-categories` | Manage asset categories |
 | `GET` / `POST` | `/reminders` | Open + recently completed reminders, add one (idempotent via `request_id`) |
 | `GET` / `PATCH` / `DELETE` | `/reminders/{id}` | Open, edit, delete a reminder |
-| `POST` | `/reminders/{id}/complete`, `/reminders/{id}/reopen` | Mark done (schedules the next one if it repeats) or undo |
+| `POST` | `/reminders/{id}/complete` | Mark done; with `{"createExpense": true}` also logs the expense (once). Schedules the next one if it repeats |
+| `POST` | `/reminders/{id}/reopen` | Undo "done" |
 | `POST` / `DELETE` | `/push/subscriptions` | Turn notifications on / off for this device |
 | `POST` | `/push/test` | Send a test notification |
 | `GET` | `/health` | Uptime check (no key needed; says only up or down) |
@@ -143,4 +145,4 @@ On first launch it asks for the **API address** and **API key**. It needs a runn
 ## Built with
 
 Plain HTML, CSS and JavaScript · SVG · Supabase (PostgreSQL + Deno Edge Functions) · Power BI Desktop · Scriptable · GitHub Pages and Actions.
-The private API is covered by automated tests: 44 API tests against a real PostgreSQL (including decrypting real push payloads and checking the VAPID signature), and more than 100 browser checks at iPhone size, including a push delivered to the real service worker.
+The private API is covered by automated tests: 45 API tests against a real PostgreSQL (including decrypting real push payloads and checking the VAPID signature), and more than 100 browser checks at iPhone size, including a push delivered to the real service worker.

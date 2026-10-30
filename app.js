@@ -108,6 +108,7 @@
       S.lastSavedId = null;
       toast("Deleted.");
       loadRecent(); if (!$("dash").hidden) loadDash();
+      loadReminders(true);   // an expense logged from a reminder is unlinked from it
     } catch (e) { toast("Couldn't undo: " + e.message, { bad: true }); }
   });
 
@@ -1050,7 +1051,6 @@
   // form pre-filled, and nothing is counted as spending until that expense is saved.
   const R = { list: [], completed: [], loadedAt: 0, filter: store.get("remFilter", "upcoming"), ctx: null, pendingOpen: null, devices: 0 };
   const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Seoul"; } catch { return "Asia/Seoul"; } })();
-  const REM_CATS = ["Bills", "Transportation", "Debt", "Subscription", "Shopping", "Other"];
   const pad2 = (n) => String(n).padStart(2, "0");
   const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   const clockText = (d) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/[  ]/g, " ");
@@ -1102,10 +1102,13 @@
   function remItem(r) {
     const st = remStatus(r), amt = remAmount(r);
     const when = el("span", { class: "rem-when", text: schedText(r) });
-    const meta = el("span", { class: "rem-meta" },
-      el("span", { class: `badge badge-${REM_CATS.indexOf(r.category) + 1}`, text: r.category }), when);
+    // the badge uses the category's dashboard colour (same slot as in the charts)
+    const badge = el("span", { class: "badge", text: r.category || "No category" });
+    if (r.category) badge.style.setProperty("--bc", catPalette(r.currency, [r.category]).color(r.category));
+    const meta = el("span", { class: "rem-meta" }, badge, when);
     if (r.repeat !== "Once") meta.append(el("span", { class: "rem-rep", text: "↻ " + r.repeat }));
     if (!r.pushEnabled && st !== "completed") meta.append(el("span", { class: "rem-rep", text: "No alert" }));
+    if (r.transactionId) meta.append(el("span", { class: "rem-rep rem-logged", text: "✓ Logged" }));
     const main = el("button", { type: "button", class: "rem-main", onclick: () => openReminder(r) },
       el("span", { class: "rem-title", text: r.title }), meta);
     const right = el("div", { class: "rem-right" });
@@ -1154,8 +1157,54 @@
   $("rem-add-dash").addEventListener("click", () => openReminder(null));
 
   // ---------- create / edit dialog ----------
-  function setRemCur(code) {
+  // Categories are your expense categories (each belongs to RM or ₩). Picking one sets the currency;
+  // switching the currency by hand moves to the category of the same name in that list, if there is one.
+  const expenseCats = (code) => S.meta.categories.filter((c) => (!c.currency || c.currency === code) && c.kind !== "income").map((c) => c.name);
+  const payMethods = (code) => (S.meta.payment_methods || []).filter((b) => !b.currency || b.currency === code).map((b) => b.name);
+  function fillCatSelect(sel, { only = null, value = "" } = {}) {
+    const groups = curOrder().filter((code) => !only || code === only).map((code) => {
+      const names = expenseCats(code);
+      if (!names.length) return null;
+      return el("optgroup", { label: `${SYM[code] || code} categories` }, ...names.map((n) => el("option", { value: `${code}|${n}`, text: n })));
+    }).filter(Boolean);
+    sel.replaceChildren(el("option", { value: "", text: groups.length ? "Choose a category" : "No expense categories yet" }), ...groups);
+    sel.value = value;
+    if (sel.value !== value) sel.value = "";
+  }
+  function fillPmSelect(sel, code, value, emptyText = "None") {
+    const names = payMethods(code);
+    sel.replaceChildren(el("option", { value: "", text: names.length ? emptyText : `No ${SYM[code] || code} payment methods yet` }),
+      ...names.map((n) => el("option", { value: n, text: n })));
+    sel.value = names.includes(value) ? value : "";
+  }
+  const remCatName = () => ($("rem-cat").value ? $("rem-cat").value.split("|").slice(1).join("|") : "");
+  function remCatHint() {
+    const h = $("rem-cat-hint"), code = R.ctx.currency, name = R.ctx.wantCat;
+    let msg = "";
+    if (!expenseCats(code).length) msg = `You have no ${SYM[code] || code} expense categories yet: add one on the Add screen.`;
+    else if (!$("rem-cat").value && name) msg = `“${name}” isn't in your ${SYM[code] || code} list: pick a ${SYM[code] || code} category.`;
+    h.textContent = msg; h.hidden = !msg;
+  }
+  $("rem-cat").addEventListener("change", () => {
+    const v = $("rem-cat").value;
+    R.ctx.wantCat = null;
+    if (v) { const code = v.split("|")[0]; if (code !== R.ctx.currency) setRemCur(code, { keepCat: true }); }
+    remCatHint(); $("rem-err").hidden = true;
+  });
+  function setRemCur(code, { keepCat = false } = {}) {
+    const prev = R.ctx.currency;
     R.ctx.currency = code;
+    if (!keepCat) {
+      const name = remCatName() || R.ctx.wantCat;
+      const target = name && expenseCats(code).find((n) => n.toLowerCase() === name.toLowerCase());
+      $("rem-cat").value = target ? `${code}|${target}` : "";
+      R.ctx.wantCat = target ? null : name || null;
+    }
+    // payment method: same name in the new currency, else the one last used for that currency
+    const pmWas = $("rem-pm").value;
+    const pmSame = pmWas && payMethods(code).find((n) => n.toLowerCase() === pmWas.toLowerCase());
+    fillPmSelect($("rem-pm"), code, pmSame || (prev !== code || !R.ctx.id ? S.bankByCur[code] : pmWas) || "");
+    remCatHint();
     for (const b of $("rem-cur").children) b.setAttribute("aria-checked", String(b.dataset.v === code));
     $("rem-sym").textContent = SYM[code] || code;
     $("rem-amount").placeholder = decimals(code) ? "0.00" : "0";
@@ -1171,11 +1220,13 @@
     const nh = nextHour();
     $("rem-h").textContent = r ? (r.isCompleted ? "Completed reminder" : "Edit reminder") : "New reminder";
     $("rem-title").value = r?.title ?? "";
-    $("rem-cat").value = r?.category ?? "Bills";
+    fillCatSelect($("rem-cat"), { value: r?.category ? `${r.currency}|${r.category}` : "" });
+    fillPmSelect($("rem-pm"), R.ctx.currency, r ? r.paymentMethod ?? "" : S.bankByCur[R.ctx.currency] ?? "");
     $("rem-cur").replaceChildren(...curOrder().map((code) => el("button", {
       type: "button", role: "radio", "data-v": code, text: SYM[code] || code, onclick: () => setRemCur(code) })));
     $("rem-amount").value = r?.amount != null ? groupDigits(Number(r.amount).toFixed(decimals(r.currency)), r.currency) : "";
-    setRemCur(R.ctx.currency);
+    setRemCur(R.ctx.currency, { keepCat: true });
+    if (r) $("rem-pm").value = payMethods(r.currency).includes(r.paymentMethod) ? r.paymentMethod : "";
     $("rem-date").value = r?.date ?? nh.date;
     $("rem-time").value = r?.time ?? nh.time;
     $("rem-repeat").value = r?.repeat ?? "Once";
@@ -1213,11 +1264,13 @@
     const amount = plain($("rem-amount").value);
     const err = (m, focus) => { $("rem-err").textContent = m; $("rem-err").hidden = false; if (focus) $(focus).focus(); };
     if (!title) return err("Enter a title.", "rem-title");
+    if (!$("rem-cat").value) return err("Choose a category.", "rem-cat");
     if (amount !== "" && !(Number(amount) > 0)) return err("Enter an amount above zero, or leave it empty.", "rem-amount");
     if (!$("rem-date").value) return err("Pick a date.", "rem-date");
     if (!/^\d{2}:\d{2}/.test($("rem-time").value)) return err("Pick a time.", "rem-time");
     const body = {
-      title, category: $("rem-cat").value, amount: amount === "" ? null : amount, currency: R.ctx.currency,
+      title, category: remCatName(), paymentMethod: $("rem-pm").value || null,
+      amount: amount === "" ? null : amount, currency: R.ctx.currency,
       date: $("rem-date").value, time: $("rem-time").value.slice(0, 5), repeat: $("rem-repeat").value,
       remindBefore: $("rem-before").value, notes: $("rem-notes").value.trim() || null,
       pushEnabled: $("rem-push").checked, timeZone: TZ,
@@ -1259,62 +1312,109 @@
   $("rem-complete").addEventListener("click", () => { const r = R.ctx?.original; $("rem-dlg").close(); R.ctx = null; if (r) askComplete(r); });
 
   // ---------- complete: "Mark as Paid / Done?" ----------
+  // "Mark Complete & Create Expense" logs the expense straight from the reminder (server side, in the same
+  // database transaction as completing it). If the reminder has no amount, category or payment method yet,
+  // the dialog asks for just those first; they are saved to the reminder (and its next instance) too.
   let doneCtx = null;
+  const missingFor = (r) => ({ amount: r.amount === null || r.amount === undefined || r.amount === "", category: !r.category, paymentMethod: !r.paymentMethod });
   function askComplete(r) {
-    doneCtx = r;
+    doneCtx = { r, filling: false };
     const amt = remAmount(r);
     $("done-what").textContent = `${r.title}${amt ? ` · ${amt}` : ""} · ${schedText(r)}`;
     $("done-next").hidden = r.repeat === "Once";
     $("done-next").textContent = `Repeats ${r.repeat.toLowerCase()}: the next reminder is scheduled automatically.`;
     $("done-err").hidden = true;
+    $("done-fill").hidden = true;
+    $("done-expense").textContent = "Mark Complete & Create Expense";
+    $("done-expense").className = "ghost strong"; $("done-only").hidden = false;
+    const miss = missingFor(r);
+    $("done-log").textContent = r.transactionId ? "The expense for this reminder is already logged."
+      : (miss.amount || miss.category || miss.paymentMethod) ? "Logs an expense from this reminder; you'll be asked for the missing details."
+      : `Logs ${amt} · ${r.category} · ${r.paymentMethod}, dated today.`;
     for (const id of ["done-only", "done-expense"]) $(id).disabled = false;
     $("done-dlg").showModal();
   }
+  function showFill(r, fields) {
+    doneCtx.filling = true;
+    const code = r.currency;
+    $("done-amt-wrap").hidden = !fields.amount;
+    $("done-cat-wrap").hidden = !fields.category;
+    $("done-pm-wrap").hidden = !fields.paymentMethod;
+    $("done-sym").textContent = SYM[code] || code;
+    $("done-amount").value = "";
+    $("done-amount").setAttribute("inputmode", decimals(code) ? "decimal" : "numeric");
+    $("done-amount").placeholder = decimals(code) ? "0.00" : "0";
+    fillCatSelect($("done-cat"), { only: code });
+    fillPmSelect($("done-pm"), code, S.bankByCur[code] ?? "", "Choose a payment method");
+    $("done-fill").hidden = false;
+    $("done-expense").textContent = "Log expense & complete";
+    $("done-expense").className = "primary"; $("done-only").hidden = true;   // one clear next step while filling in
+    $("done-log").textContent = "";
+    const first = fields.amount ? "done-amount" : fields.category ? "done-cat" : "done-pm";
+    setTimeout(() => $(first).focus(), 50);
+  }
+  $("done-amount").addEventListener("input", () => formatInput($("done-amount"), doneCtx?.r.currency || "MYR"));
   $("done-form").addEventListener("submit", async (e) => {
     const how = e.submitter?.value;
     if (how !== "done" && how !== "expense") { doneCtx = null; return; }
     e.preventDefault();
-    const r = doneCtx;
+    const r = doneCtx.r;
+    const fail = (m) => { $("done-err").textContent = m; $("done-err").hidden = false; };
+    $("done-err").hidden = true;
+    let body;
+    if (how === "expense") {
+      const miss = missingFor(r);
+      if (!r.transactionId && !doneCtx.filling && (miss.amount || miss.category || miss.paymentMethod)) return showFill(r, miss);
+      body = { createExpense: true, date: todayLocal() };
+      if (doneCtx.filling) {
+        if (!$("done-amt-wrap").hidden) {
+          const a = plain($("done-amount").value);
+          if (!(Number(a) > 0)) { $("done-amount").focus(); return fail("Enter the amount you paid."); }
+          body.amount = a;
+        }
+        if (!$("done-cat-wrap").hidden) {
+          if (!$("done-cat").value) { $("done-cat").focus(); return fail("Choose a category."); }
+          body.category = $("done-cat").value.split("|").slice(1).join("|");
+        }
+        if (!$("done-pm-wrap").hidden) {
+          if (!$("done-pm").value) { $("done-pm").focus(); return fail("Choose a payment method."); }
+          body.paymentMethod = $("done-pm").value;
+        }
+      }
+    }
     for (const id of ["done-only", "done-expense"]) $(id).disabled = true;
     try {
-      const res = await api("POST", `/reminders/${r.id}/complete`);
+      const res = await api("POST", `/reminders/${r.id}/complete`, body);
       $("done-dlg").close(); doneCtx = null;
       upsertLocal(res.reminder);
       if (res.next) upsertLocal(res.next);
       const next = res.next ? ` Next: ${schedText(res.next)}.` : "";
-      if (how === "expense") {
-        prefillExpense(res.reminder);
-        toast("Marked complete." + next + " Check the expense below, then tap Save expense.", { ms: 8000 });
+      if (how === "expense" && res.transaction) {
+        const t = res.transaction;
+        if (body.paymentMethod) { S.bankByCur[t.currency] = t.which_bank; store.set("bankByCur", S.bankByCur); }
+        S.lastSavedId = res.expense_logged ? t.transaction_id : null;
+        toast(`${res.expense_logged ? "Logged" : "Already logged"} ${remAmount({ amount: t.amount, currency: t.currency })} · ${t.item} · ${t.which_bank}.${next}`,
+              { undo: res.expense_logged, ms: 7000 });
+        loadRecent();
+        if (!$("dash").hidden) loadDash(true);
       } else toast(`Marked complete.${next}`);
       loadReminders(true);
     } catch (x) {
-      if (x instanceof ApiError && x.status === 404) { $("done-dlg").close(); toast("That reminder was deleted."); loadReminders(true); return; }
-      $("done-err").textContent = "Couldn't complete it: " + x.message; $("done-err").hidden = false;
       for (const id of ["done-only", "done-expense"]) $(id).disabled = false;
+      if (x instanceof ApiError && x.status === 404 && x.body?.error?.code === "not_found" && !/Route/.test(x.message)) {
+        $("done-dlg").close(); toast("That reminder was deleted."); loadReminders(true); return;
+      }
+      if (x instanceof ApiError && x.body?.error?.code === "expense_details_missing") {   // stale copy: ask for what the server says
+        const f = x.body.error.fields || {};
+        showFill(r, { amount: !!f.amount, category: !!f.category, paymentMethod: !!f.paymentMethod });
+        return fail("Add the missing details to log the expense.");
+      }
+      fail("Couldn't complete it: " + (x.body?.error?.message || x.message));
     }
   });
   async function reopenReminder(r) {
     try { const res = await api("POST", `/reminders/${r.id}/reopen`); upsertLocal(res.reminder); toast("Reopened."); }
     catch (x) { toast("Couldn't reopen: " + x.message, { bad: true }); }
-  }
-  // the standard expense entry form, pre-filled; nothing is saved until the user taps Save expense
-  function prefillExpense(r) {
-    showTab("add");
-    if (S.type !== "expense") S.type = "expense";
-    if (S.meta.currencies.some((c) => c.code === r.currency)) { S.currency = r.currency; store.set("currency", r.currency); }
-    renderCurrencySegs(); renderCurrency();
-    const cats = catsForType(), want = r.category.toLowerCase();
-    const match = cats.find((c) => c.toLowerCase() === want)
-      || cats.find((c) => c.toLowerCase().startsWith(want.slice(0, 5)) || want.startsWith(c.toLowerCase().slice(0, 5)));
-    if (match) { S.category = match; renderType(); }
-    $("amount").value = r.amount != null ? groupDigits(Number(r.amount).toFixed(decimals(r.currency)), r.currency) : "";
-    formatInput($("amount"), S.currency);
-    $("item").value = r.title;
-    $("date").value = r.date;
-    $("notes").value = "";
-    S.requestId = uuid();
-    window.scrollTo({ top: 0 });
-    setTimeout(() => $(r.amount != null ? "item" : "amount").focus(), 60);
   }
 
   // ---------- Web Push: this device ----------

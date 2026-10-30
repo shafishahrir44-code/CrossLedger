@@ -282,13 +282,16 @@
       <label class="field"><span>Title</span>
         <input id="rem-title" maxlength="80" autocomplete="off" autocapitalize="sentences" placeholder="e.g. Electricity bill" required></label>
       <label class="field"><span>Category</span>
-        <select id="rem-cat"><option>Bills</option><option>Transportation</option><option>Debt</option><option>Subscription</option><option>Shopping</option><option>Other</option></select></label>
+        <select id="rem-cat" required></select>
+        <span class="muted small" id="rem-cat-hint" hidden></span></label>
       <div class="field"><span id="rem-amt-label">Amount <span class="optional">(optional)</span></span>
         <div class="amt-row">
           <label class="budget-input grow"><span id="rem-sym">RM</span>
             <input id="rem-amount" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-labelledby="rem-amt-label"></label>
           <div class="seg" id="rem-cur" role="radiogroup" aria-label="Currency"></div>
         </div></div>
+      <label class="field"><span>Payment method / bank <span class="optional">(optional)</span></span>
+        <select id="rem-pm"></select></label>
       <div class="two">
         <label class="field"><span>Date</span><input id="rem-date" type="date" required></label>
         <label class="field"><span>Time</span><input id="rem-time" type="time" required></label>
@@ -321,9 +324,17 @@
       <h2>Mark as Paid / Done?</h2>
       <p id="done-what" class="del-what"></p>
       <p class="muted small" id="done-next" hidden></p>
+      <div class="stack done-fill" id="done-fill" hidden>
+        <p class="muted small">To log the expense, add:</p>
+        <label class="field" id="done-amt-wrap"><span>Amount paid</span>
+          <span class="budget-input"><span id="done-sym">RM</span><input id="done-amount" inputmode="decimal" autocomplete="off"></span></label>
+        <label class="field" id="done-cat-wrap"><span>Category</span><select id="done-cat"></select></label>
+        <label class="field" id="done-pm-wrap"><span>Payment method / bank</span><select id="done-pm"></select></label>
+      </div>
       <p id="done-err" class="error" role="alert" hidden></p>
       <button class="primary" value="done" type="submit" id="done-only">Just Mark Complete</button>
       <button class="ghost strong" value="expense" type="submit" id="done-expense">Mark Complete &amp; Create Expense</button>
+      <p class="muted small done-log" id="done-log"></p>
       <button class="link center-link" value="cancel" type="submit" formnovalidate>Cancel</button>
     </form>
   </dialog>
