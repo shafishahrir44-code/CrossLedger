@@ -1,7 +1,7 @@
 # Ledger
 
 **A fast, private expense and net-worth tracker for life between Malaysia and Korea.**
-Ringgit (RM) and Won (₩) are kept completely separate: their own categories, payment methods, budgets and totals. It lives on the iPhone Home Screen and updates in real time.
+Ringgit (RM) and Won (₩) are kept completely separate: their own categories, payment methods, budgets and totals. It lives on the iPhone Home Screen, updates in real time, and reminds you before bills are due with real push notifications.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screens-dark.png">
@@ -21,8 +21,21 @@ Ringgit (RM) and Won (₩) are kept completely separate: their own categories, p
 | **Budgets that talk back** | A monthly budget per currency plus optional budgets per category. Bars show *% used* and turn red when you go over. |
 | **Live dashboard** | Spent / remaining meter, a category doughnut, budget bars and a 6-month stacked trend. Pick any month; it refreshes every 15 seconds while open. |
 | **Assets and net worth** | Savings accounts, ASB, gold, stocks, EPF… grouped by category with totals, a dated value history and RM / ₩ trend lines for the last 3 months. |
+| **Bill reminders with notifications** | Bills, subscriptions, debt instalments and top-ups, in RM or ₩, once or repeating (daily to yearly). The server sends a push notification at the time you pick (or 10 min to 1 day before), even when Ledger is closed. Tap it to open that reminder. |
+| **Reminders stay separate from spending** | A reminder never counts as an expense. When you pay, choose **Mark Complete & Create Expense** and the normal entry form opens pre-filled. Nothing is logged until you tap *Save expense*. |
 | **Works on a bad connection** | If the network drops, entries wait on the phone and send themselves later. A retried send can never create a duplicate. |
 | **Everywhere on the iPhone** | Installable Home Screen app, a Scriptable Home / Lock Screen widget (`LedgerWidget.js`), and an iOS Shortcut for Siri or a double tap on the back of the phone. |
+
+## Reminders
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/reminders-dark.png">
+  <img alt="Ledger reminders on iPhone: the Upcoming section on the dashboard with an overdue ₩30,000 T-money top-up and an RM120 electricity bill due tomorrow, the Reminders tab with notifications switched on, the edit form with a monthly repeat and a 1-day-before alert, and the Mark as Paid / Done? prompt" src="docs/reminders-light.png">
+</picture>
+
+- **Upcoming** on the dashboard shows the next 3 (overdue first), with *+ Reminder* and *View all*. The **Reminders** tab splits them into *Upcoming*, *Overdue* and *Completed*.
+- **Repeating reminders** move on by themselves. Completing one schedules the next, and monthly ones keep their day (31 Jan → 28 Feb → 31 Mar). If you forget one, the next still arrives on time and the missed one waits under *Overdue*.
+- **Notifications on iPhone** need iOS 16.4 or later, with Ledger added to the Home Screen and opened from there. In a Safari tab, or if notifications are blocked, the app explains what to do and reminders still show in the app.
 
 ## How it fits together
 
@@ -37,7 +50,9 @@ flowchart LR
         F["Edge Function API<br/>API key · validation · no duplicates"]
         D[("PostgreSQL<br/>private schema")]
         V["Reporting views"]
+        C["pg_cron<br/>every minute"]
     end
+    N["Push service<br/>(Apple / Google / Mozilla)"]
     P["Power BI Desktop<br/>DirectQuery dashboard"]
     G["GitHub Pages"]
     J["GitHub Actions<br/>daily: exchange rates + keep-alive"]
@@ -50,10 +65,15 @@ flowchart LR
     D --> V
     V -- read-only role --> P
     J -- HTTPS + API key --> F
+    D --- C
+    C -- "only when a reminder is due" --> F
+    F -- "encrypted Web Push (VAPID)" --> N
+    N -- notification --> A
 ```
 
 - **This repository** is only the client: the web app, the widget script and the daily GitHub Action. It is published with GitHub Pages.
 - **The API and database** live in a separate, private project: a Deno Edge Function in front of Supabase Postgres. The phone never talks to the database directly. The API signs in with a role that can only run the app's own functions, and Power BI reads through a separate read-only role.
+- **Reminders are scheduled on the server,** not in the browser. A database job checks every minute and calls the API only when a notification is due. The API sends it once per device and retries the next minute if the push service is briefly down. The app's service worker (`sw.js`) shows the notification and opens the right reminder when you tap it.
 - **Exchange rates** (MYR ↔ KRW) come from the European Central Bank once a day and are stored with their date and source. Amounts are never converted with made-up rates.
 
 ## Charts
@@ -69,15 +89,17 @@ All charts are drawn by hand as SVG, with no chart library:
 - **No secrets in this repo.** Its full history has been checked against the real keys and passwords. `config.js` holds only the public API address; the API key is typed in once on each device and kept in that browser's storage (or the iOS Keychain for the widget).
 - **Every request needs the key.** Requests without it get `401`, and browsers may only call the API from the app's own web address (CORS).
 - **Strict browser sandbox.** The page loads no third-party scripts, fonts or trackers, and its Content-Security-Policy blocks inline scripts and styles.
+- **Push notifications are end-to-end encrypted** to each device (RFC 8291) and signed with a server-only key (VAPID). The API only sends to real browser push services, and the public key in `/meta` is the only push key the app ever sees.
 - **GitHub Action secrets** (`EXPENSE_API_URL`, `EXPENSE_API_KEY`) are stored in the repository's encrypted *Secrets*, never in the workflow file.
 
 ## What's in this repo
 
 | File | Purpose |
 |---|---|
-| `index.html` | App shell: entry form, dashboard, assets, dialogs |
+| `index.html` | App shell: entry form, dashboard, assets, reminders, dialogs |
 | `app.js` | All app logic and the SVG charts (plain JavaScript, no build step) |
 | `styles.css` | Layout, light and dark themes, chart palette |
+| `sw.js` | Service worker: shows push notifications and opens the tapped reminder (no offline cache) |
 | `config.js` | Public API address (no credentials) |
 | `manifest.webmanifest`, `icon*.png`, `icon.svg` | Home Screen app install |
 | `LedgerWidget.js` | Scriptable widget for the Home and Lock Screen |
@@ -107,6 +129,11 @@ On first launch it asks for the **API address** and **API key**. It needs a runn
 | `GET` / `POST` | `/assets` | Assets with their value history, add an asset |
 | `PATCH` / `DELETE` | `/assets/{id}` | Update a value (or its date), edit, delete |
 | `POST` / `PATCH` / `DELETE` | `/asset-categories` | Manage asset categories |
+| `GET` / `POST` | `/reminders` | Open + recently completed reminders, add one (idempotent via `request_id`) |
+| `GET` / `PATCH` / `DELETE` | `/reminders/{id}` | Open, edit, delete a reminder |
+| `POST` | `/reminders/{id}/complete`, `/reminders/{id}/reopen` | Mark done (schedules the next one if it repeats) or undo |
+| `POST` / `DELETE` | `/push/subscriptions` | Turn notifications on / off for this device |
+| `POST` | `/push/test` | Send a test notification |
 | `GET` | `/health` | Uptime check (no key needed; says only up or down) |
 
 ### The daily workflow
@@ -116,4 +143,4 @@ On first launch it asks for the **API address** and **API key**. It needs a runn
 ## Built with
 
 Plain HTML, CSS and JavaScript · SVG · Supabase (PostgreSQL + Deno Edge Functions) · Power BI Desktop · Scriptable · GitHub Pages and Actions.
-The private API is covered by automated tests (30 API tests against a real PostgreSQL, and 66 browser checks at iPhone size).
+The private API is covered by automated tests: 44 API tests against a real PostgreSQL (including decrypting real push payloads and checking the VAPID signature), and more than 100 browser checks at iPhone size, including a push delivered to the real service worker.

@@ -133,6 +133,15 @@
       <div class="legend legend-wrap" id="trend-legend"></div>
     </section>
 
+    <section class="panel" id="upcoming-panel">
+      <div class="panel-head">
+        <h2>Upcoming</h2>
+        <button type="button" class="add-btn add-btn-sm" id="rem-add-dash">+ Reminder</button>
+      </div>
+      <ul class="rem-list" id="upcoming-list" aria-live="polite"></ul>
+      <button type="button" class="link view-all" id="rem-view-all">View all</button>
+    </section>
+
     <section class="panel">
       <h2>Transactions</h2>
       <div class="filters">
@@ -168,10 +177,33 @@
     <div id="asset-groups"></div>
   </section>
 
+  <!-- Reminders (kept apart from transactions until one is converted into an expense) -->
+  <section id="reminders" class="screen" hidden>
+    <header class="topbar">
+      <h1 class="screen-title">Reminders</h1>
+      <button type="button" class="add-btn" id="rem-add">+ Reminder</button>
+    </header>
+    <div class="panel notif-card" id="notif-card">
+      <label class="switch-row" for="notif-switch">
+        <span class="notif-text"><span class="t1">Notifications on this device</span>
+          <span class="muted small" id="notif-msg">Checking…</span></span>
+        <input type="checkbox" role="switch" class="toggle" id="notif-switch" disabled>
+      </label>
+      <button type="button" class="link small" id="notif-test" hidden>Send a test notification</button>
+    </div>
+    <div class="seg seg-wide rem-tabs" role="tablist" aria-label="Show" id="rem-tabs">
+      <button type="button" role="tab" data-f="upcoming" aria-selected="true">Upcoming <span class="count" id="rem-n-upcoming"></span></button>
+      <button type="button" role="tab" data-f="overdue" aria-selected="false">Overdue <span class="count" id="rem-n-overdue"></span></button>
+      <button type="button" role="tab" data-f="completed" aria-selected="false">Completed</button>
+    </div>
+    <ul class="rem-list rem-full" id="rem-list" role="tabpanel"></ul>
+  </section>
+
   <nav class="tabs" id="tabs" hidden>
     <button type="button" data-tab="add" aria-current="page">Add</button>
     <button type="button" data-tab="dash">Dashboard</button>
     <button type="button" data-tab="assets">Assets</button>
+    <button type="button" data-tab="reminders">Reminders<span class="tab-badge" id="tab-badge" hidden></span></button>
   </nav>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden>
@@ -241,6 +273,58 @@
         <button id="asset-save" class="primary" value="save" type="submit">Add</button>
       </div>
       <button type="button" id="asset-remove" class="remove-link" hidden>Delete asset</button>
+    </form>
+  </dialog>
+
+  <dialog id="rem-dlg">
+    <form method="dialog" id="rem-form" class="stack" novalidate>
+      <h2 id="rem-h">New reminder</h2>
+      <label class="field"><span>Title</span>
+        <input id="rem-title" maxlength="80" autocomplete="off" autocapitalize="sentences" placeholder="e.g. Electricity bill" required></label>
+      <label class="field"><span>Category</span>
+        <select id="rem-cat"><option>Bills</option><option>Transportation</option><option>Debt</option><option>Subscription</option><option>Shopping</option><option>Other</option></select></label>
+      <div class="field"><span id="rem-amt-label">Amount <span class="optional">(optional)</span></span>
+        <div class="amt-row">
+          <label class="budget-input grow"><span id="rem-sym">RM</span>
+            <input id="rem-amount" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-labelledby="rem-amt-label"></label>
+          <div class="seg" id="rem-cur" role="radiogroup" aria-label="Currency"></div>
+        </div></div>
+      <div class="two">
+        <label class="field"><span>Date</span><input id="rem-date" type="date" required></label>
+        <label class="field"><span>Time</span><input id="rem-time" type="time" required></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>Repeat</span>
+          <select id="rem-repeat"><option>Once</option><option>Daily</option><option>Weekly</option><option>Monthly</option><option>Yearly</option></select></label>
+        <label class="field"><span>Remind me</span>
+          <select id="rem-before"><option>At scheduled time</option><option>10 min before</option><option>30 min before</option><option>1 hour before</option><option>1 day before</option></select></label>
+      </div>
+      <label class="field"><span>Notes <span class="optional">(optional)</span></span>
+        <textarea id="rem-notes" maxlength="500" rows="2"></textarea></label>
+      <div class="push-box">
+        <label class="switch-row" for="rem-push"><span>Enable Web Push Notification</span>
+          <input type="checkbox" role="switch" class="toggle" id="rem-push" checked></label>
+        <p class="muted small" id="rem-push-hint" hidden></p>
+      </div>
+      <p id="rem-err" class="error" role="alert" hidden></p>
+      <div class="row">
+        <button value="cancel" formnovalidate class="ghost" type="submit">Cancel</button>
+        <button id="rem-save" class="primary" value="save" type="submit">Save</button>
+      </div>
+      <button type="button" id="rem-complete" class="ghost" hidden>Mark as complete</button>
+      <button type="button" id="rem-remove" class="remove-link" hidden>Delete reminder</button>
+    </form>
+  </dialog>
+
+  <dialog id="done-dlg">
+    <form method="dialog" id="done-form" class="stack">
+      <h2>Mark as Paid / Done?</h2>
+      <p id="done-what" class="del-what"></p>
+      <p class="muted small" id="done-next" hidden></p>
+      <p id="done-err" class="error" role="alert" hidden></p>
+      <button class="primary" value="done" type="submit" id="done-only">Just Mark Complete</button>
+      <button class="ghost strong" value="expense" type="submit" id="done-expense">Mark Complete &amp; Create Expense</button>
+      <button class="link center-link" value="cancel" type="submit" formnovalidate>Cancel</button>
     </form>
   </dialog>
 

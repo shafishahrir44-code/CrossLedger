@@ -341,3 +341,89 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
 .acc-head .amt { font-weight: 650; white-space: nowrap; }
 .acc-body { margin: 0 0 8px 24px; }
 .asset-row .t3 { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+
+/* ---- reminders ---- */
+.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
+.panel-head h2 { margin: 0; }
+.add-btn-sm { min-height: 34px; padding: 0 12px; font-size: 14px; }
+.view-all { display: block; margin: 6px 0 0 auto; font-size: 14px; min-height: 36px; }
+.rem-list { list-style: none; margin: 0; padding: 0; }
+.rem-item { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+.rem-item:last-child { border-bottom: 0; }
+.rem-main {
+  flex: 1; min-width: 0; display: grid; gap: 4px; text-align: left; background: none; border: 0;
+  padding: 11px 0; min-height: 56px;
+}
+.rem-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rem-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; color: var(--ink-2); }
+.rem-item.overdue .rem-when { color: var(--over); font-weight: 600; }
+.rem-item.completed .rem-title { color: var(--ink-2); text-decoration: line-through; text-decoration-thickness: 1px; }
+.rem-rep { font-size: 12px; }
+.rem-right { display: flex; align-items: center; gap: 6px; flex: none; }
+.rem-amt { font-weight: 650; white-space: nowrap; }
+.rem-item.completed .rem-amt { color: var(--ink-2); }
+.rem-check {
+  width: 44px; height: 44px; border-radius: 50%; border: 0; background: none; position: relative; flex: none;
+}
+.rem-check::before {
+  content: ""; position: absolute; inset: 11px; border-radius: 50%; border: 2px solid var(--ink-2);
+}
+.rem-check:hover::before, .rem-check:focus-visible::before { border-color: var(--inc); background: var(--inc-soft); }
+.rem-check:hover::after, .rem-check:focus-visible::after {
+  content: ""; position: absolute; left: 18px; top: 15px; width: 6px; height: 11px;
+  border-right: 2px solid var(--inc); border-bottom: 2px solid var(--inc); transform: rotate(45deg);
+}
+.rem-act { border: 1px solid var(--line); background: transparent; border-radius: 999px; min-height: 36px; padding: 0 12px; font-size: 13px; color: var(--ink-2); }
+.rem-empty { padding: 12px 0; border-bottom: 0 !important; }
+.rem-full { background: var(--surface); border-radius: 16px; padding: 0 14px; margin-top: 10px; }
+.badge {
+  display: inline-block; font-size: 12px; font-weight: 600; line-height: 1; padding: 4px 8px; border-radius: 999px;
+  color: var(--ink); background: color-mix(in srgb, var(--bc, var(--s-other)) 20%, var(--surface));
+}
+.badge-1 { --bc: var(--s1); } .badge-2 { --bc: var(--s2); } .badge-3 { --bc: var(--s8); }
+.badge-4 { --bc: var(--s7); } .badge-5 { --bc: var(--s5); } .badge-6 { --bc: var(--s-other); }
+
+.rem-tabs { margin-top: 12px; }
+.seg button[role="tab"][aria-selected="true"] { background: var(--ink); color: var(--bg); }
+.seg .count:not(:empty) { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 4px; border-radius: 999px;
+  font-size: 12px; line-height: 18px; background: var(--line); color: var(--ink); }
+.seg button[data-f="overdue"] .count:not(:empty) { background: var(--over); color: #fff; }
+.tabs button { position: relative; }
+.tab-badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 5px; border-radius: 999px;
+  font-size: 11px; line-height: 18px; background: var(--over); color: #fff; vertical-align: 1px; }
+
+/* switches (checkbox role="switch") */
+.switch-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; min-height: 44px; }
+.toggle {
+  appearance: none; -webkit-appearance: none; flex: none; width: 51px; height: 31px; min-height: 0; padding: 0; margin: 0;
+  border-radius: 999px; border: 0; background: var(--line); position: relative; cursor: pointer; transition: background .2s;
+}
+.toggle::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform .2s;
+}
+.toggle:checked { background: var(--inc); }
+.toggle:checked::after { transform: translateX(20px); }
+.toggle:disabled { opacity: .45; cursor: default; }
+.notif-card { margin-top: 6px; }
+.notif-text { display: grid; gap: 2px; }
+.notif-text .t1 { font-weight: 600; }
+.notif-card.warn #notif-msg { color: var(--ink); }
+#notif-test { margin-top: 4px; font-size: 14px; }
+.push-box { border-top: 1px solid var(--line); padding-top: 8px; }
+.push-box p { margin: 4px 0 0; }
+
+/* reminder dialog */
+#rem-dlg { max-height: 92vh; overflow-y: auto; }
+#rem-dlg .field { margin: 0; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.two input, .two select { min-width: 0; }
+.amt-row { display: flex; gap: 8px; align-items: center; }
+.amt-row .seg { flex: none; }
+.amt-row .seg button { padding: 8px 12px; }
+.ghost.strong { font-weight: 650; }
+.center-link { justify-self: center; min-height: 44px; }
+#done-dlg .stack { gap: 10px; }
+#rem-complete { min-height: 46px; }
+.rem-tabs button { padding: 8px 6px; white-space: nowrap; font-size: 14px; }
+.tab-badge { position: absolute; top: -7px; right: 2px; margin: 0; min-width: 16px; line-height: 16px; font-size: 10px; padding: 0 4px; box-shadow: 0 0 0 2px var(--bg); }

@@ -13,6 +13,7 @@
   ],
   "shortcuts": [
     { "name": "Add expense", "url": "./?tab=add" },
-    { "name": "Dashboard", "url": "./?tab=dash" }
+    { "name": "Dashboard", "url": "./?tab=dash" },
+    { "name": "Reminders", "url": "./?tab=reminders" }
   ]
 }

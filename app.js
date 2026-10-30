@@ -113,7 +113,7 @@
 
   // ---------- tabs ----------
   function showTab(tab) {
-    for (const t of ["add", "dash", "assets"]) $(t).hidden = t !== tab;
+    for (const t of ["add", "dash", "assets", "reminders"]) $(t).hidden = t !== tab;
     for (const b of document.querySelectorAll("#tabs button")) b.setAttribute("aria-current", b.dataset.tab === tab ? "page" : "false");
     clearInterval(S.dashTimer);
     if (tab === "dash") {
@@ -122,6 +122,7 @@
       S.dashTimer = setInterval(() => { if (document.visibilityState === "visible") loadDash(true); }, 15000);
     }
     if (tab === "assets") loadAssets();
+    if (tab === "reminders") { renderReminderViews(); loadReminders(true); renderNotif(); }
     history.replaceState(null, "", "?tab=" + tab);
   }
   document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -133,7 +134,7 @@
     return m;
   }
   function showSetup(err) {
-    $("setup").hidden = false; $("add").hidden = true; $("dash").hidden = true; $("assets").hidden = true; $("tabs").hidden = true;
+    $("setup").hidden = false; $("add").hidden = true; $("dash").hidden = true; $("assets").hidden = true; $("reminders").hidden = true; $("tabs").hidden = true;
     $("setup-url").value = S.api;
     if (err) { $("setup-error").textContent = err; $("setup-error").hidden = false; }
   }
@@ -644,6 +645,7 @@
       ]);
       renderDash(s, cur);
       S.monthTx = t.transactions; renderTable(cur);
+      if (Date.now() - R.loadedAt > 30000) loadReminders(true); else renderUpcoming();
       $("updated").textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + ", refreshes every 15 s";
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
@@ -1043,6 +1045,385 @@
     }
   });
 
+  // ---------- reminders ----------
+  // Reminders live apart from transactions: completing one can optionally open the normal expense
+  // form pre-filled, and nothing is counted as spending until that expense is saved.
+  const R = { list: [], completed: [], loadedAt: 0, filter: store.get("remFilter", "upcoming"), ctx: null, pendingOpen: null, devices: 0 };
+  const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Seoul"; } catch { return "Asia/Seoul"; } })();
+  const REM_CATS = ["Bills", "Transportation", "Debt", "Subscription", "Shopping", "Other"];
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const clockText = (d) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/[  ]/g, " ");
+  const remStatus = (r, now = Date.now()) => (r.isCompleted ? "completed" : new Date(r.dueAt).getTime() < now ? "overdue" : "upcoming");
+  // RM120 · RM120.50 · ₩15,000
+  function remAmount(r) {
+    if (r.amount === null || r.amount === undefined || r.amount === "") return "";
+    const n = Number(r.amount), d = r.currency === "KRW" || Number.isInteger(n) ? 0 : 2;
+    return (SYM[r.currency] ?? r.currency + " ") + n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+  // "Today, 9:00 PM" · "Tomorrow, 9:00 PM" · "Fri, 9:00 PM" · "Nov 20, 9:00 PM" · "Overdue · Nov 10"
+  function schedText(r, now = new Date()) {
+    const due = new Date(r.dueAt);
+    const md = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + (d.getFullYear() !== now.getFullYear() ? ` ${d.getFullYear()}` : "");
+    if (r.isCompleted) return "Done " + md(new Date(r.completedAt || r.dueAt));
+    const today = dayKey(now), day = dayKey(due);
+    const shift = (n) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + n));
+    if (due < now) {
+      if (day === today) return `Overdue · Today, ${clockText(due)}`;
+      if (day === shift(-1)) return "Overdue · Yesterday";
+      return `Overdue · ${md(due)}`;
+    }
+    if (day === today) return `Today, ${clockText(due)}`;
+    if (day === shift(1)) return `Tomorrow, ${clockText(due)}`;
+    const days = Math.round((new Date(due.getFullYear(), due.getMonth(), due.getDate()) - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+    if (days < 7) return `${due.toLocaleDateString("en-US", { weekday: "short" })}, ${clockText(due)}`;
+    return `${md(due)}, ${clockText(due)}`;
+  }
+  const openSorted = () => [...R.list].sort((a, b) => {
+    const sa = remStatus(a), sb = remStatus(b);
+    if (sa !== sb) return sa === "overdue" ? -1 : 1;           // overdue first, then soonest
+    return new Date(a.dueAt) - new Date(b.dueAt) || a.id - b.id;
+  });
+
+  async function loadReminders(silent = false) {
+    try {
+      const r = await api("GET", "/reminders");
+      R.list = r.reminders; R.completed = r.completed; R.devices = r.push_devices ?? 0; R.loadedAt = Date.now(); R.missing = false;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
+      if (e instanceof ApiError && e.status === 404) R.missing = true;
+      else if (!silent) toast("Couldn't load reminders: " + e.message, { bad: true });
+    }
+    renderReminderViews();
+    if (R.pendingOpen) { const id = R.pendingOpen; R.pendingOpen = null; openReminderById(id); }
+  }
+  function renderReminderViews() { renderUpcoming(); renderReminderList(); renderBadge(); }
+
+  function remItem(r) {
+    const st = remStatus(r), amt = remAmount(r);
+    const when = el("span", { class: "rem-when", text: schedText(r) });
+    const meta = el("span", { class: "rem-meta" },
+      el("span", { class: `badge badge-${REM_CATS.indexOf(r.category) + 1}`, text: r.category }), when);
+    if (r.repeat !== "Once") meta.append(el("span", { class: "rem-rep", text: "↻ " + r.repeat }));
+    if (!r.pushEnabled && st !== "completed") meta.append(el("span", { class: "rem-rep", text: "No alert" }));
+    const main = el("button", { type: "button", class: "rem-main", onclick: () => openReminder(r) },
+      el("span", { class: "rem-title", text: r.title }), meta);
+    const right = el("div", { class: "rem-right" });
+    if (amt) right.append(el("span", { class: "rem-amt num", text: amt }));
+    if (st === "completed") {
+      right.append(el("button", { type: "button", class: "rem-act", text: "Reopen", onclick: () => reopenReminder(r) }));
+    } else {
+      right.append(el("button", { type: "button", class: "rem-check", "aria-label": `Mark ${r.title} as complete`,
+                                  title: "Mark as complete", onclick: () => askComplete(r) }));
+    }
+    return el("li", { class: `rem-item ${st}`, "data-id": String(r.id) }, main, right);
+  }
+  function renderUpcoming() {
+    const box = $("upcoming-list");
+    if (R.missing) { box.replaceChildren(el("li", { class: "muted small", text: "Your server needs this update first: run scripts\\deploy.ps1 on your laptop." })); $("rem-view-all").hidden = true; return; }
+    const open = openSorted();
+    box.replaceChildren(...open.slice(0, 3).map(remItem));
+    if (!open.length) box.append(el("li", { class: "rem-empty muted small", text: "Nothing coming up. Tap + Reminder to add a bill or payment." }));
+    $("rem-view-all").textContent = open.length > 3 ? `View all (${open.length})` : "View all";
+  }
+  function renderReminderList() {
+    const now = Date.now();
+    const over = R.list.filter((r) => remStatus(r, now) === "overdue");
+    const up = R.list.filter((r) => remStatus(r, now) === "upcoming");
+    $("rem-n-upcoming").textContent = up.length ? String(up.length) : "";
+    $("rem-n-overdue").textContent = over.length ? String(over.length) : "";
+    for (const b of $("rem-tabs").children) b.setAttribute("aria-selected", String(b.dataset.f === R.filter));
+    const rows = R.filter === "completed" ? R.completed
+      : (R.filter === "overdue" ? over : up).sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt));
+    const box = $("rem-list");
+    box.replaceChildren(...rows.map(remItem));
+    if (R.missing) box.replaceChildren(el("li", { class: "rem-empty muted small", text: "Your server needs this update first: run scripts\\deploy.ps1 on your laptop." }));
+    else if (!rows.length) {
+      box.append(el("li", { class: "rem-empty muted small", text: R.filter === "upcoming" ? "No upcoming reminders. Tap + Reminder to add one."
+        : R.filter === "overdue" ? "Nothing overdue." : "Completed reminders appear here." }));
+    }
+  }
+  function renderBadge() {
+    const n = R.list.filter((r) => remStatus(r) === "overdue").length;
+    $("tab-badge").hidden = !n; $("tab-badge").textContent = String(n);
+    try { if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch { /* not allowed */ }
+  }
+  for (const b of $("rem-tabs").children) b.addEventListener("click", () => { R.filter = b.dataset.f; store.set("remFilter", R.filter); renderReminderList(); });
+  $("rem-view-all").addEventListener("click", () => showTab("reminders"));
+  $("rem-add").addEventListener("click", () => openReminder(null));
+  $("rem-add-dash").addEventListener("click", () => openReminder(null));
+
+  // ---------- create / edit dialog ----------
+  function setRemCur(code) {
+    R.ctx.currency = code;
+    for (const b of $("rem-cur").children) b.setAttribute("aria-checked", String(b.dataset.v === code));
+    $("rem-sym").textContent = SYM[code] || code;
+    $("rem-amount").placeholder = decimals(code) ? "0.00" : "0";
+    $("rem-amount").setAttribute("inputmode", decimals(code) ? "decimal" : "numeric");
+    formatInput($("rem-amount"), code);
+  }
+  function nextHour() {
+    const d = new Date(Date.now() + 3600000);
+    return { date: dayKey(d), time: `${pad2(d.getHours())}:00` };
+  }
+  function openReminder(r) {
+    R.ctx = { id: r?.id ?? null, original: r ?? null, currency: r?.currency ?? S.currency, requestId: uuid() };
+    const nh = nextHour();
+    $("rem-h").textContent = r ? (r.isCompleted ? "Completed reminder" : "Edit reminder") : "New reminder";
+    $("rem-title").value = r?.title ?? "";
+    $("rem-cat").value = r?.category ?? "Bills";
+    $("rem-cur").replaceChildren(...curOrder().map((code) => el("button", {
+      type: "button", role: "radio", "data-v": code, text: SYM[code] || code, onclick: () => setRemCur(code) })));
+    $("rem-amount").value = r?.amount != null ? groupDigits(Number(r.amount).toFixed(decimals(r.currency)), r.currency) : "";
+    setRemCur(R.ctx.currency);
+    $("rem-date").value = r?.date ?? nh.date;
+    $("rem-time").value = r?.time ?? nh.time;
+    $("rem-repeat").value = r?.repeat ?? "Once";
+    $("rem-before").value = r?.remindBefore ?? "At scheduled time";
+    $("rem-notes").value = r?.notes ?? "";
+    $("rem-push").checked = r ? !!r.pushEnabled : true;
+    renderPushHint();
+    $("rem-err").hidden = true;
+    $("rem-save").disabled = false;
+    $("rem-complete").hidden = !r || r.isCompleted;
+    const rm = $("rem-remove");
+    rm.hidden = !r; rm.classList.remove("confirm"); rm.dataset.armed = "";
+    rm.textContent = r && r.repeat !== "Once" && !r.isCompleted ? "Delete reminder (stops repeating)" : "Delete reminder";
+    $("rem-dlg").showModal();
+    if (!r) setTimeout(() => $("rem-title").focus(), 50);
+  }
+  async function openReminderById(id) {
+    showTab("reminders");
+    const r = [...R.list, ...R.completed].find((x) => String(x.id) === String(id));
+    if (r) return openReminder(r);
+    try { openReminder((await api("GET", `/reminders/${encodeURIComponent(id)}`)).reminder); }
+    catch (e) { toast(e instanceof ApiError && e.status === 404 ? "That reminder was deleted." : "Couldn't open the reminder: " + e.message, { bad: true }); }
+  }
+  $("rem-amount").addEventListener("input", () => formatInput($("rem-amount"), R.ctx?.currency || "MYR"));
+  function remError(err) {
+    let msg = err.message;
+    if (err instanceof ApiError && err.status === 404 && /Route/.test(msg)) msg = "Your server needs this update first: run scripts\\deploy.ps1 on your laptop.";
+    else if (err.body?.error?.fields) msg = Object.entries(err.body.error.fields).map(([k, v]) => `${k} ${v}`).join(", ");
+    $("rem-err").textContent = msg; $("rem-err").hidden = false;
+  }
+  $("rem-form").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "save") { R.ctx = null; return; }
+    e.preventDefault();
+    const title = $("rem-title").value.replace(/\s+/g, " ").trim();
+    const amount = plain($("rem-amount").value);
+    const err = (m, focus) => { $("rem-err").textContent = m; $("rem-err").hidden = false; if (focus) $(focus).focus(); };
+    if (!title) return err("Enter a title.", "rem-title");
+    if (amount !== "" && !(Number(amount) > 0)) return err("Enter an amount above zero, or leave it empty.", "rem-amount");
+    if (!$("rem-date").value) return err("Pick a date.", "rem-date");
+    if (!/^\d{2}:\d{2}/.test($("rem-time").value)) return err("Pick a time.", "rem-time");
+    const body = {
+      title, category: $("rem-cat").value, amount: amount === "" ? null : amount, currency: R.ctx.currency,
+      date: $("rem-date").value, time: $("rem-time").value.slice(0, 5), repeat: $("rem-repeat").value,
+      remindBefore: $("rem-before").value, notes: $("rem-notes").value.trim() || null,
+      pushEnabled: $("rem-push").checked, timeZone: TZ,
+    };
+    // Turning on alerts for the first time on this device: the permission prompt must come from this tap.
+    let pushNote = "";
+    if (body.pushEnabled && !P.sub && pushEnv().ok) {
+      try { await enablePush(); } catch (x) { pushNote = " " + x.message; }
+    }
+    $("rem-save").disabled = true;
+    try {
+      const r = R.ctx.id ? await api("PATCH", `/reminders/${R.ctx.id}`, body)
+                         : await api("POST", "/reminders", { request_id: R.ctx.requestId, ...body });
+      $("rem-dlg").close();
+      const env = pushEnv();
+      if (body.pushEnabled && !pushNote && !P.sub) pushNote = env.ok ? " Turn on notifications in Reminders to get the alert." : " " + env.msg;
+      toast((R.ctx.id ? "Reminder saved." : "Reminder added.") + pushNote, { ms: pushNote ? 8000 : 4000 });
+      R.ctx = null;
+      upsertLocal(r.reminder);
+      loadReminders(true);
+    } catch (x) { remError(x); $("rem-save").disabled = false; }
+  });
+  function upsertLocal(r) {
+    R.list = R.list.filter((x) => x.id !== r.id); R.completed = R.completed.filter((x) => x.id !== r.id);
+    (r.isCompleted ? R.completed : R.list).push(r);
+    renderReminderViews();
+  }
+  $("rem-remove").addEventListener("click", async () => {
+    const rm = $("rem-remove");
+    if (!rm.dataset.armed) { rm.dataset.armed = "1"; rm.classList.add("confirm"); rm.textContent = "Tap again to delete"; return; }
+    const id = R.ctx.id;
+    try {
+      await api("DELETE", `/reminders/${id}`);
+    } catch (x) { if (!(x instanceof ApiError && x.status === 404)) return remError(x); }
+    $("rem-dlg").close(); R.ctx = null;
+    R.list = R.list.filter((x) => x.id !== id); R.completed = R.completed.filter((x) => x.id !== id);
+    renderReminderViews(); toast("Reminder deleted."); loadReminders(true);
+  });
+  $("rem-complete").addEventListener("click", () => { const r = R.ctx?.original; $("rem-dlg").close(); R.ctx = null; if (r) askComplete(r); });
+
+  // ---------- complete: "Mark as Paid / Done?" ----------
+  let doneCtx = null;
+  function askComplete(r) {
+    doneCtx = r;
+    const amt = remAmount(r);
+    $("done-what").textContent = `${r.title}${amt ? ` · ${amt}` : ""} · ${schedText(r)}`;
+    $("done-next").hidden = r.repeat === "Once";
+    $("done-next").textContent = `Repeats ${r.repeat.toLowerCase()}: the next reminder is scheduled automatically.`;
+    $("done-err").hidden = true;
+    for (const id of ["done-only", "done-expense"]) $(id).disabled = false;
+    $("done-dlg").showModal();
+  }
+  $("done-form").addEventListener("submit", async (e) => {
+    const how = e.submitter?.value;
+    if (how !== "done" && how !== "expense") { doneCtx = null; return; }
+    e.preventDefault();
+    const r = doneCtx;
+    for (const id of ["done-only", "done-expense"]) $(id).disabled = true;
+    try {
+      const res = await api("POST", `/reminders/${r.id}/complete`);
+      $("done-dlg").close(); doneCtx = null;
+      upsertLocal(res.reminder);
+      if (res.next) upsertLocal(res.next);
+      const next = res.next ? ` Next: ${schedText(res.next)}.` : "";
+      if (how === "expense") {
+        prefillExpense(res.reminder);
+        toast("Marked complete." + next + " Check the expense below, then tap Save expense.", { ms: 8000 });
+      } else toast(`Marked complete.${next}`);
+      loadReminders(true);
+    } catch (x) {
+      if (x instanceof ApiError && x.status === 404) { $("done-dlg").close(); toast("That reminder was deleted."); loadReminders(true); return; }
+      $("done-err").textContent = "Couldn't complete it: " + x.message; $("done-err").hidden = false;
+      for (const id of ["done-only", "done-expense"]) $(id).disabled = false;
+    }
+  });
+  async function reopenReminder(r) {
+    try { const res = await api("POST", `/reminders/${r.id}/reopen`); upsertLocal(res.reminder); toast("Reopened."); }
+    catch (x) { toast("Couldn't reopen: " + x.message, { bad: true }); }
+  }
+  // the standard expense entry form, pre-filled; nothing is saved until the user taps Save expense
+  function prefillExpense(r) {
+    showTab("add");
+    if (S.type !== "expense") S.type = "expense";
+    if (S.meta.currencies.some((c) => c.code === r.currency)) { S.currency = r.currency; store.set("currency", r.currency); }
+    renderCurrencySegs(); renderCurrency();
+    const cats = catsForType(), want = r.category.toLowerCase();
+    const match = cats.find((c) => c.toLowerCase() === want)
+      || cats.find((c) => c.toLowerCase().startsWith(want.slice(0, 5)) || want.startsWith(c.toLowerCase().slice(0, 5)));
+    if (match) { S.category = match; renderType(); }
+    $("amount").value = r.amount != null ? groupDigits(Number(r.amount).toFixed(decimals(r.currency)), r.currency) : "";
+    formatInput($("amount"), S.currency);
+    $("item").value = r.title;
+    $("date").value = r.date;
+    $("notes").value = "";
+    S.requestId = uuid();
+    window.scrollTo({ top: 0 });
+    setTimeout(() => $(r.amount != null ? "item" : "amount").focus(), 60);
+  }
+
+  // ---------- Web Push: this device ----------
+  const P = { reg: null, sub: null };
+  function pushEnv() {
+    const ua = navigator.userAgent;
+    const iOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const standalone = navigator.standalone === true || window.matchMedia?.("(display-mode: standalone)").matches;
+    if (!window.isSecureContext) return { ok: false, msg: "Notifications need the app to be opened over https." };
+    if (!("serviceWorker" in navigator && "PushManager" in window && "Notification" in window)) {
+      if (iOS && !standalone) return { ok: false, msg: "On iPhone, notifications work in the Home Screen app: tap Share, then Add to Home Screen, and open Ledger from there (iOS 16.4 or later)." };
+      if (iOS) return { ok: false, msg: "This iOS version can't show web notifications. Update to iOS 16.4 or later." };
+      return { ok: false, msg: "This browser doesn't support push notifications. Reminders still show here." };
+    }
+    if (!S.meta?.push?.available) return { ok: false, msg: "The server isn't set up for notifications yet: run scripts\\deploy.ps1 on your laptop." };
+    if (Notification.permission === "denied") {
+      return { ok: false, denied: true, msg: iOS ? "Notifications are blocked. Allow them in iPhone Settings › Notifications › Ledger."
+                                                 : "Notifications are blocked for this site. Allow them in the browser's site settings." };
+    }
+    return { ok: true };
+  }
+  const keyBytes = (b64) => { const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((b64.length + 3) % 4)); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
+  function sameKey(sub, key) {
+    const k = sub?.options?.applicationServerKey;
+    if (!k || !key) return true;
+    const a = new Uint8Array(k), b = keyBytes(key);
+    return a.length === b.length && a.every((x, i) => x === b[i]);
+  }
+  async function enablePush() {
+    const env = pushEnv();
+    if (!env.ok) throw new Error(env.msg);
+    // requested first, straight from the tap (iOS only shows the prompt for a user gesture)
+    const perm = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (perm !== "granted") throw new Error(pushEnv().msg || "Notifications weren't allowed.");
+    const reg = P.reg || await navigator.serviceWorker.ready;
+    const key = S.meta.push.vapid_public_key;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameKey(sub, key)) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+    await api("POST", "/push/subscriptions", sub.toJSON());
+    P.sub = sub;
+    renderNotif();
+  }
+  async function disablePush() {
+    const sub = P.sub;
+    P.sub = null;
+    if (sub) {
+      try { await api("DELETE", "/push/subscriptions", { endpoint: sub.endpoint }); } catch { /* server copy expires on its own */ }
+      try { await sub.unsubscribe(); } catch { /* already gone */ }
+    }
+    renderNotif();
+  }
+  function renderNotif() {
+    const env = pushEnv(), on = !!P.sub && "Notification" in window && Notification.permission === "granted";
+    const sw = $("notif-switch");
+    sw.checked = on; sw.disabled = !on && !env.ok;
+    $("notif-msg").textContent = on ? "On. Reminder alerts arrive even when Ledger is closed."
+      : env.ok ? "Off. Turn on to get reminder alerts on this device." : env.msg;
+    $("notif-card").classList.toggle("warn", !on && !env.ok);
+    $("notif-test").hidden = !on;
+    if ($("rem-dlg").open) renderPushHint();
+  }
+  function renderPushHint() {
+    const h = $("rem-push-hint"), env = pushEnv();
+    let msg = "";
+    if ($("rem-push").checked && !P.sub) msg = env.ok ? "Notifications aren't on for this device yet: you'll be asked to allow them when you save." : env.msg;
+    h.textContent = msg; h.hidden = !msg;
+  }
+  $("rem-push").addEventListener("change", renderPushHint);
+  for (const id of ["rem-title", "rem-amount", "rem-date", "rem-time"]) $(id).addEventListener("input", () => { $("rem-err").hidden = true; });
+  $("notif-switch").addEventListener("change", async () => {
+    const sw = $("notif-switch");
+    sw.disabled = true;
+    try {
+      if (sw.checked) { await enablePush(); toast("Notifications are on for this device."); }
+      else { await disablePush(); toast("Notifications are off for this device."); }
+    } catch (x) {
+      toast(x.message, { bad: true, ms: 8000 });
+    } finally { renderNotif(); }
+  });
+  $("notif-test").addEventListener("click", async () => {
+    try { const r = await api("POST", "/push/test", { endpoint: P.sub?.endpoint }); toast(r.message); }
+    catch (x) {
+      if (x instanceof ApiError && x.status === 404 && x.body?.error?.code === "no_devices") {   // server dropped it: register again
+        try { await api("POST", "/push/subscriptions", P.sub.toJSON()); toast("Re-registered this device. Try the test again."); } catch (y) { toast(y.message, { bad: true }); }
+      } else toast("Test failed: " + x.message, { bad: true, ms: 7000 });
+    }
+  });
+  async function initPush() {
+    if ("serviceWorker" in navigator && window.isSecureContext) {
+      try { P.reg = await navigator.serviceWorker.register("sw.js", { scope: "./" }); } catch { /* unsupported (e.g. private mode) */ }
+      try { P.sub = P.reg?.pushManager ? await P.reg.pushManager.getSubscription() : null; } catch { P.sub = null; }
+      navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data?.type === "open-reminder") {
+          if (e.data.id != null) openReminderById(e.data.id); else showTab("reminders");
+        }
+      });
+      // keep the server's device list in step with this browser (it drops expired subscriptions)
+      if (P.sub && Notification.permission === "granted" && S.meta?.push?.available) {
+        if (!sameKey(P.sub, S.meta.push.vapid_public_key)) {
+          try { await P.sub.unsubscribe(); } catch { /* */ }
+          P.sub = null;
+          try { await enablePush(); } catch { /* user can turn it on again */ }
+        } else api("POST", "/push/subscriptions", P.sub.toJSON()).catch(() => {});
+      }
+    }
+    renderNotif();
+  }
+
   // ---------- boot ----------
   async function start() {
     $("setup").hidden = true; $("tabs").hidden = false;
@@ -1053,18 +1434,30 @@
     $("date").value = todayLocal();
     $("month").value = todayLocal().slice(0, 7);
     renderCurrencySegs(); renderCurrency(); renderType();
-    const want = new URLSearchParams(location.search).get("tab");
-    const tab = ["dash", "assets"].includes(want) ? want : "add";
+    const params = new URLSearchParams(location.search);
+    const want = params.get("tab");
+    const tab = ["dash", "assets", "reminders"].includes(want) ? want : "add";
+    if (/^\d+$/.test(params.get("reminder") || "")) R.pendingOpen = params.get("reminder");   // opened from a notification
     showTab(tab);
+    if (tab !== "reminders" && tab !== "dash") loadReminders(true);   // tab badge
+    initPush();
     if (tab === "add") setTimeout(() => $("amount").focus(), 50);
     loadRecent(); flushQueue();
   }
   window.addEventListener("online", flushQueue);
+  // relative times ("Tomorrow", "Overdue") stay current while a reminder list is on screen (display only;
+  // notifications are scheduled by the server)
+  setInterval(() => {
+    if (document.visibilityState === "visible" && (!$("reminders").hidden || !$("dash").hidden)) renderReminderViews();
+  }, 30000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     flushQueue();
     if (!$("dash").hidden) loadDash(true);
     if (!$("assets").hidden) loadAssets(true);
+    if (!$("reminders").hidden) loadReminders(true);
+    else renderReminderViews();
+    renderNotif();
   });
   if (!S.key || !S.api) showSetup(); else start();
 })();
