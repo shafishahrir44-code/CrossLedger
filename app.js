@@ -551,22 +551,24 @@
     box.replaceChildren();
     if (!(total > 0)) { box.hidden = true; return; }
     box.hidden = false;
-    const R = 50, C = 2 * Math.PI * R, gap = items.length > 1 ? 1.5 : 0;   // 2px surface gap between slices (viewBox units)
+    const R = 52, C = 2 * Math.PI * R, gap = items.length > 1 ? 1.5 : 0;   // 2px surface gap between slices (viewBox units)
     const svg = svgEl("svg", { viewBox: "0 0 140 140", role: "img", "aria-label": "Spending by category" });
     const center = el("div", { class: "donut-center" });
-    const showTotal = () => center.replaceChildren(el("div", { class: "muted small", text: "Spent" }), el("div", { class: "num donut-v", text: money(total, cur) }));
+    // the hole fits ~9 characters at full size; longer amounts step the font down so they never spill
+    const vClass = (txt) => "num donut-v" + (txt.length > 12 ? " xs" : txt.length > 9 ? " sm" : "");
+    const showTotal = () => center.replaceChildren(el("div", { class: "muted small", text: "Spent" }), el("div", { class: vClass(money(total, cur)), text: money(total, cur) }));
     let off = 0;
     const segs = [];
     const apply = () => {   // the picked slice survives the 15-second refresh
       const x = items.find((i) => i.label === S.donutPick);
       if (!x) { S.donutPick = null; for (const g of segs) g.classList.remove("dim"); return showTotal(); }
       for (const g of segs) g.classList.toggle("dim", g.dataset.label !== x.label);
-      center.replaceChildren(el("div", { class: "muted small", text: x.label }), el("div", { class: "num donut-v", text: money(x.value, cur) }),
+      center.replaceChildren(el("div", { class: "muted small", text: x.label }), el("div", { class: vClass(money(x.value, cur)), text: money(x.value, cur) }),
         el("div", { class: "muted small", text: `${(x.value / total * 100).toFixed(1)}%` }));
     };
     for (const x of items) {
       const len = (x.value / total) * C;
-      const c = svgEl("circle", { cx: 70, cy: 70, r: R, fill: "none", "stroke-width": 22,
+      const c = svgEl("circle", { cx: 70, cy: 70, r: R, fill: "none", "stroke-width": 16,
         "stroke-dasharray": `${Math.max(0.01, len - gap).toFixed(2)} ${(C - len + gap).toFixed(2)}`,
         "stroke-dashoffset": (-off).toFixed(2), transform: "rotate(-90 70 70)", class: "donut-seg", tabindex: "0" });
       c.style.stroke = x.color; c.dataset.label = x.label; segs.push(c);
@@ -597,7 +599,7 @@
     const max = Math.max(...totals, 0);
     box.replaceChildren(); legend.replaceChildren(); detail.textContent = "";
     if (!(max > 0)) { box.append(el("p", { class: "muted small", text: "No spending in these months yet." })); return; }
-    const W = 600, H = 170, pl = 6, pr = 6, pt = 18, pb = 22, slotW = (W - pl - pr) / months.length, bw = Math.min(56, slotW * 0.56);
+    const W = 340, H = 170, pl = 2, pr = 2, pt = 18, pb = 22, slotW = (W - pl - pr) / months.length, bw = Math.min(40, slotW * 0.6);
     const y = (v) => (H - pb) - (H - pt - pb) * (v / max);
     const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Monthly spending by category" });
     svg.append(svgEl("line", { x1: pl, x2: W - pr, y1: H - pb, y2: H - pb, class: "axis" }));
@@ -867,7 +869,7 @@
         text: isEnd ? `${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${compactMoney(Math.abs(diff), code)} since ${from === start ? new Date(start + "T00:00:00").toLocaleString("en", { month: "short" }) : fmtDay(from).replace(/ \d{4}$/, "")}` : fmtDay(p.d) }));
     showHead(points[points.length - 1], true);
     // geometry
-    const W = 300, H = 130, pl = 4, pr = 4, pt = 10, pb = 20;
+    const W = 170, H = 96, pl = 3, pr = 5, pt = 8, pb = 16;
     const t0 = Date.parse(start), t1 = Date.parse(end) || t0 + 1, span = Math.max(1, t1 - t0);
     const x = (d) => pl + (W - pl - pr) * ((Date.parse(d) - t0) / span);
     let lo = Math.min(...points.map((p) => p.v)), hi = Math.max(...points.map((p) => p.v));
@@ -880,14 +882,14 @@
       const m = new Date(sd.getFullYear(), sd.getMonth() + i, 1);
       const ds = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}-01`, xx = x(ds);
       svg.append(svgEl("line", { x1: xx.toFixed(1), x2: xx.toFixed(1), y1: pt, y2: H - pb, class: "grid" }));
-      const tx = svgEl("text", { x: (xx + 3).toFixed(1), y: H - 6 }); tx.textContent = m.toLocaleString("en", { month: "short" }); svg.append(tx);
+      const tx = svgEl("text", { x: (xx + 2).toFixed(1), y: H - 4 }); tx.textContent = m.toLocaleString("en", { month: "short" }); svg.append(tx);
     }
     // step line
     let d = `M${x(points[0].d).toFixed(1)},${y(points[0].v).toFixed(1)}`;
     for (let i = 1; i < points.length; i++) d += ` H${x(points[i].d).toFixed(1)} V${y(points[i].v).toFixed(1)}`;
     const line = svgEl("path", { d, class: "nw-line", fill: "none" });
     svg.append(line);
-    const dot = svgEl("circle", { r: 4.5, class: "nw-dot", cx: x(points[points.length - 1].d).toFixed(1), cy: y(last).toFixed(1) });
+    const dot = svgEl("circle", { r: 3.5, class: "nw-dot", cx: x(points[points.length - 1].d).toFixed(1), cy: y(last).toFixed(1) });
     const cross = svgEl("line", { y1: pt, y2: H - pb, class: "cross", visibility: "hidden" });
     svg.append(cross, dot);
     // hover / drag: crosshair + the value on that day in the header
