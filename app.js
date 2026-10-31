@@ -185,7 +185,7 @@
       const type = badge(v);
       const chip = el("button", {
       type: "button", role: editing ? null : "radio", "aria-checked": editing ? null : String(v === current), "data-v": v, text: v,
-      "aria-label": editing ? `Edit ${v}` : type ? `${v}, adds to your ${ASSET_TYPE_LABEL[type]} assets` : null,
+      "aria-label": editing ? `Edit ${v}` : type ? `${v}, adds to your ${type} asset` : null,
       onclick: () => {
         if (editing) return onEdit(v);
         onPick(v);
@@ -193,7 +193,7 @@
       },
       });
       // asset-building categories (Gold, ASB, Savings) get a small "+" badge
-      if (type) { chip.classList.add("chip-asset"); chip.title = `Adds to your ${ASSET_TYPE_LABEL[type]} assets`; chip.append(el("span", { class: "chip-badge", "aria-hidden": "true", text: "+" })); }
+      if (type) { chip.classList.add("chip-asset"); chip.title = `Adds to your ${type} asset`; chip.append(el("span", { class: "chip-badge", "aria-hidden": "true", text: "+" })); }
       return chip;
     });
     for (const c of chips) for (const a of ["role", "aria-checked", "aria-label"]) if (c.getAttribute(a) === "null") c.removeAttribute(a);
@@ -207,7 +207,9 @@
   // "investment" | "commodity" | "savings" for asset-building categories, "" for plain expenses
   const catAssetType = (c) => (c?.is_asset ?? (c?.asset_type && c.asset_type !== "expense")) ? c.asset_type : "";
   function catsForType() {
-    return curCats().filter((c) => c.kind === S.type || c.kind === "both").map((c) => c.name);
+    const list = curCats().filter((c) => c.kind === S.type || c.kind === "both");
+    // asset-connected categories first (with their badge), then plain ones; each group keeps your order
+    return [...list.filter((c) => catAssetType(c)), ...list.filter((c) => !catAssetType(c))].map((c) => c.name);
   }
   function banksForCur() {
     return S.meta.payment_methods ? S.meta.payment_methods.filter(inCur).map((b) => b.name) : S.meta.banks;
@@ -226,7 +228,7 @@
       onEdit: (c) => openItem("cat", c),
       onAdd: () => openItem("cat", null),
       addLabel: "Add category",
-      badge: (c) => catAssetType(findCat(c)) || null,
+      badge: (c) => { const k = findCat(c); return catAssetType(k) ? (k.asset_name || k.name) : null; },
     });
     const hint = $("cat-hint");
     hint.hidden = cats.length > 0 && !S.editCats;
@@ -279,6 +281,10 @@
     const c = findCat(catName);
     if (!catAssetType(c) || S.type !== "expense") return null;
     const src = pmAsset();
+    if (c.asset_id) {
+      const linked = S.assets.find((a) => a.asset_id === c.asset_id && a.currency === S.currency);
+      if (linked) return linked.asset_id === src?.asset_id ? null : linked;
+    }
     const hit = S.assets.find((a) => a.currency === S.currency && (a.name || "").toLowerCase() === c.name.toLowerCase()
                                      && a.asset_id !== src?.asset_id);
     return hit || { name: c.name, value: 0, currency: S.currency, isNew: true };
@@ -325,7 +331,7 @@
   function showBudgetFields() {
     // budgets are for spending: hidden for payment methods and Income categories
     $("item-budget-wrap").hidden = !itemCtx || itemCtx.list !== "cat" || itemCtx.kind === "income";
-    $("item-atype-wrap").hidden = $("item-budget-wrap").hidden;
+    $("item-asset-wrap").hidden = $("item-budget-wrap").hidden;
   }
   function budgetChanges() {
     // returns [{currency, amount|null}] for inputs that differ from what's saved
@@ -342,6 +348,18 @@
     return out;
   }
   for (const b of $("item-kind").children) b.addEventListener("click", () => setItemKind(b.dataset.kind));
+  function showAssetPick() {
+    const on = $("item-connect").checked;
+    $("item-asset").hidden = !on;
+    $("item-asset-hint").hidden = !on;
+    const name = $("item-name").value.trim() || "this category";
+    $("item-asset-hint").textContent = $("item-asset").value === "new"
+      ? `Each expense here is taken from the payment method and added to a new asset called "${name}" (it appears in Assets after the first expense).`
+      : "Each expense here is taken from the payment method and added to this asset.";
+  }
+  $("item-connect").addEventListener("change", showAssetPick);
+  $("item-asset").addEventListener("change", showAssetPick);
+  $("item-name").addEventListener("input", () => { if (!$("item-asset").hidden) showAssetPick(); });
   function openItem(list, name) {
     if (list === "acat") return openAssetCat(name);
     const isCat = list === "cat";
@@ -354,7 +372,20 @@
     $("item-kind-wrap").hidden = !isCat;
     if (isCat) setItemKind(itemCtx.kind);
     itemCtx.budgets = existing?.budgets || {};
-    $("item-atype").value = catAssetType(existing);
+    // "Connect to an asset": New asset (named like the category) or one of your assets in this currency
+    const connected = !!catAssetType(existing);
+    $("item-connect").checked = connected;
+    const mine = S.assets.filter((a) => a.currency === S.currency);
+    const opt = (a) => el("option", { value: String(a.asset_id), text: `${assetName(a)} · ${money(a.value ?? 0, a.currency)}` });
+    const banks = mine.filter((a) => a.account), others = mine.filter((a) => !a.account);
+    $("item-asset").replaceChildren(
+      el("option", { value: "new", text: "New asset" }),
+      ...(others.length ? [el("optgroup", { label: "Your assets" }, ...others.map(opt))] : []),
+      ...(banks.length ? [el("optgroup", { label: "Banks" }, ...banks.map(opt))] : []));
+    $("item-asset").value = connected && existing.asset_id && mine.some((a) => a.asset_id === existing.asset_id)
+      ? String(existing.asset_id) : "new";
+    itemCtx.asset0 = connected ? $("item-asset").value : null;
+    showAssetPick();
     $("item-budgets").replaceChildren(...S.meta.currencies.filter((c) => c.code === S.currency).map((c) => {
       const cur = existing?.budgets?.[c.code];
       const input = el("input", { id: `item-budget-${c.code}`, inputmode: c.minor_units ? "decimal" : "numeric",
@@ -396,6 +427,7 @@
     }
     loadRecent();
     if (!$("dash").hidden) loadDash(true);
+    loadFormAssets();   // a new payment method gets its account in "Banks"; a new link changes the hints
     toast(message);
   }
   $("item-form").addEventListener("submit", async (e) => {
@@ -409,8 +441,10 @@
     try {
       let r = null;
       const existing = list === "cat" && original ? findCat(original) : null;
-      const atype = list === "cat" && kind !== "income" ? $("item-atype").value : "";
-      const acatChanged = list === "cat" && atype !== catAssetType(existing);
+      // asset link: null = not connected, "new", or an asset id (as a string)
+      const link = list === "cat" && kind !== "income" && $("item-connect").checked ? $("item-asset").value : null;
+      const acatChanged = list === "cat" && link !== (itemCtx.asset0 ?? null);
+      const linkBody = link === null ? null : link === "new" ? "new" : Number(link);
       const catChanged = !original || name !== original || (list === "cat" && existing && (existing.kind !== kind || acatChanged));
       if (list === "acat") {
         if (!original) r = await api("POST", "/asset-categories", { name });
@@ -419,10 +453,10 @@
         if (r) await afterAssetCatChange(original, r.asset_category.name, r.message);
         return;
       }
-      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency, ...(atype ? { asset_type: atype } : {}) } : { name, currency });
+      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency, ...(link !== null ? { asset: linkBody } : {}) } : { name, currency });
       else if (list === "cat" && catChanged) {
         r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind, currency,
-                                      ...(acatChanged ? { asset_type: atype || null } : {}) });
+                                      ...(acatChanged ? { asset: linkBody } : {}) });
       }
       else if (list === "bank" && name !== original) r = await api("PATCH", path, { name: original, new_name: name, currency });
       const saved = r ? (r.category || r.payment_method).name : original;

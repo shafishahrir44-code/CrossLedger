@@ -220,14 +220,12 @@
           <button type="button" role="radio" data-kind="income" aria-checked="false">Income</button>
           <button type="button" role="radio" data-kind="both" aria-checked="false">Both</button>
         </div></div>
-      <label class="field" id="item-atype-wrap"><span>Builds an asset</span>
-        <select id="item-atype">
-          <option value="">No, a plain expense</option>
-          <option value="investment">Investment (ASB, stocks, unit trust)</option>
-          <option value="commodity">Commodity (gold, silver)</option>
-          <option value="savings">Savings</option>
-        </select>
-        <span class="muted small">Each expense here is taken from the payment method and added to a matching asset in Assets.</span></label>
+      <div class="field" id="item-asset-wrap">
+        <label class="switch-row" for="item-connect"><span>Connect to an asset</span>
+          <input type="checkbox" role="switch" class="toggle" id="item-connect"></label>
+        <select id="item-asset" aria-label="Asset to add to" hidden></select>
+        <span class="muted small" id="item-asset-hint" hidden></span>
+      </div>
       <div class="field" id="item-budget-wrap">
         <span id="item-budget-label">Monthly budget <span class="optional">(optional)</span></span>
         <div class="budget-row" id="item-budgets" role="group" aria-labelledby="item-budget-label"></div>
