@@ -549,31 +549,41 @@
   const DEL_PATH = { expense: (id) => `/transactions/${id}`, reminder: (id) => `/reminders/${id}` };
   function enqueue(job) {
     const q = queue(); q.push(job); store.set("queue", q);
+    renderSync();
     // Chrome / Android: ask sw.js to wake the app when the connection is back (iOS has no Background
     // Sync, so there the queue is sent when the app is next opened or comes back online)
     navigator.serviceWorker?.ready.then((reg) => reg.sync?.register("ledger-queue")).catch(() => {});
   }
   const pendingDeletes = (entity) => new Set(queue().filter((j) => j.type === "DELETE" && j.entity === entity).map((j) => String(j.id)));
+  // Each queued item may carry _status ("waiting" | "failed") and _error (why the last try didn't go through);
+  // those keys are stripped before sending. Rejected items (4xx) are kept as "failed" until retried or discarded.
+  const cleanJob = (j) => Object.fromEntries(Object.entries(j).filter(([k]) => !k.startsWith("_")));
+  const errText = (e) => e?.body?.error?.fields
+    ? Object.entries(e.body.error.fields).map(([k, v]) => `${k} ${v}`).join(", ")
+    : e instanceof ApiError ? (e.body?.error?.message || `HTTP ${e.status}`) : "No connection";
   let flushing = false;
-  async function flushQueue() {
+  async function flushQueue({ manual = false } = {}) {
     const q = queue();
-    if (!q.length || !S.key || flushing) return;
-    flushing = true;
+    if (!q.length || !S.key || flushing) { renderSync(); return; }
+    flushing = true; renderSync();
     const left = [];
     let sentTx = 0, sentDel = 0;
     for (const job of q) {
+      if (job._status === "failed" && !manual) { left.push(job); continue; }   // rejected ones wait for Retry
       try {
         if (job.type === "DELETE") { await api("DELETE", DEL_PATH[job.entity](job.id)); sentDel++; }
-        else { await api("POST", "/transactions", job); sentTx++; }
+        else { await api("POST", "/transactions", cleanJob(job)); sentTx++; }
       } catch (e) {
         if (job.type === "DELETE" && e instanceof ApiError && e.status === 404) { sentDel++; continue; }  // already gone
-        if (!(e instanceof ApiError) || e.status >= 500) left.push(job);
+        const offline = !(e instanceof ApiError) || e.status >= 500;
+        left.push({ ...job, _status: offline ? "waiting" : "failed", _error: offline && e instanceof ApiError ? `server error (${e.status})` : errText(e) });
       }
     }
     // keep anything queued while this ran
     const added = queue().slice(q.length);
     store.set("queue", [...left, ...added]);
     flushing = false;
+    renderSync();
     const n = sentTx + sentDel;
     if (n) {
       toast(`Synced ${n} offline change${n === 1 ? "" : "s"}.`);
@@ -581,7 +591,48 @@
       if (sentDel) loadReminders(true);
       if (!$("dash").hidden) loadDash(true);
     }
+    if (manual && left.some((j) => j._status === "failed")) toast("Some changes still couldn't be sent. See the reasons in the list.", { bad: true, ms: 7000 });
   }
+  function describeJob(j) {
+    if (j.type === "DELETE") return `Delete ${j.entity === "reminder" ? "reminder" : "entry"}${j._label ? ` "${j._label}"` : ""}`;
+    return `${j.type === "income" ? "Income" : "Expense"}: ${j.item || j.category} ${money(j.amount, j.currency)} · ${j.date}`;
+  }
+  function renderSync() {
+    const q = queue(), failed = q.filter((j) => j._status === "failed").length, n = q.length;
+    $("sync-bar").hidden = n === 0;
+    $("sync-bar").classList.toggle("bad", failed > 0);
+    const s = n === 1 ? "" : "s";
+    $("sync-text").textContent = flushing ? `Sending ${n} offline change${s}…`
+      : failed ? `${n} change${s} not synced · ${failed} need${failed === 1 ? "s" : ""} attention`
+      : `${n} change${s} waiting to sync${navigator.onLine ? "" : " (offline)"}`;
+    if ($("sync-dlg").open) renderSyncList();
+  }
+  function renderSyncList() {
+    const q = queue();
+    $("sync-help").textContent = !q.length ? "Everything is synced."
+      : navigator.onLine ? "These are sent automatically. Ones the server refused show why; retry them after fixing the cause, or discard them."
+      : "You're offline. These are sent automatically when you're back online.";
+    $("sync-list").replaceChildren(...q.map((j, i) => el("li", { class: "sync-item" + (j._status === "failed" ? " failed" : "") },
+      el("div", { class: "t-main" },
+        el("div", { class: "t1", text: describeJob(j) }),
+        el("div", { class: "t2", text: j._status === "failed" ? `Not sent: ${j._error}` : j._error ? `Waiting · last try: ${j._error}` : "Waiting" })),
+      el("button", { type: "button", class: "link danger-link", text: "Discard", "aria-label": `Discard: ${describeJob(j)}`,
+                     onclick: () => discardJob(i) }))));
+    $("sync-retry").disabled = flushing || !q.length;
+  }
+  function discardJob(i) {
+    if (flushing) return;
+    const q = queue(); const [j] = q.splice(i, 1); store.set("queue", q);
+    renderSync(); renderSyncList();
+    if (j?.type === "DELETE") { if (j.entity === "reminder") loadReminders(true); else { loadRecent(); if (!$("dash").hidden) loadDash(true); } }
+  }
+  $("sync-open").addEventListener("click", () => { renderSyncList(); $("sync-dlg").showModal(); });
+  $("sync-retry").addEventListener("click", async () => {
+    $("sync-retry").disabled = true;
+    await flushQueue({ manual: true });
+    renderSyncList();
+  });
+  window.addEventListener("offline", renderSync);
 
   $("tx-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -617,7 +668,7 @@
         const f = err.body?.error?.fields;
         toast(f ? Object.entries(f).map(([k, v]) => `${k} ${v}`).join(", ") : err.message, { bad: true, ms: 7000 });
       } else {
-        const q = queue(); q.push(body); store.set("queue", q);
+        const q = queue(); q.push(body); store.set("queue", q); renderSync();
         toast("No connection. Kept on this phone and will send automatically.", { bad: true, ms: 7000 });
         resetForm();
       }
@@ -642,8 +693,8 @@
   function txRow(t) {
     const inc = t.transaction_type === "Income";
     const links = (t.source_asset ? ` · from ${t.source_asset}` : "") + (t.target_asset ? ` → ${t.target_asset}` : "");
-    return swipeable(el("li", { tabindex: "0", "aria-label": `${t.item}, ${money(t.amount, t.currency)}. Swipe left or press Enter to delete.`,
-                                onclick: () => askDelete(t), onkeydown: (e) => { if (e.key === "Enter") askDelete(t); } },
+    return swipeable(el("li", { tabindex: "0", "aria-label": `${t.item}, ${money(t.amount, t.currency)}. Press Enter to edit; swipe left to delete.`,
+                                onclick: () => openTx(t), onkeydown: (e) => { if (e.key === "Enter") openTx(t); } },
       el("div", { class: "t-main" }, el("div", { class: "t1", text: t.item }), el("div", { class: "t2", text: `${t.category}, ${t.which_bank}, ${t.date}${links}` })),
       el("div", { class: "t-right" },
         el("div", { class: "amt num" + (inc ? " inc" : ""), text: (inc ? "+" : "") + money(t.amount, t.currency) }))),
@@ -777,7 +828,10 @@
 
   // delete from a swipe: online -> API now; offline -> queued for the next connection
   async function deleteEntity(entity, id, tx = null) {
-    const job = { type: "DELETE", entity, id: String(id) };
+    const label = entity === "reminder"
+      ? [...R.list, ...R.completed].find((x) => String(x.id) === String(id))?.title
+      : tx?.item;
+    const job = { type: "DELETE", entity, id: String(id), ...(label ? { _label: label } : {}) };
     if (entity === "expense" && String(S.lastSavedId) === String(id)) S.lastSavedId = null;
     if (entity === "expense") optimisticRemoveTx(String(id), tx);
     if (entity === "reminder") {
@@ -851,6 +905,169 @@
       }
     }
   });
+
+  // ---------- edit an entry ----------
+  // Amount, description, category, payment method, date and notes. The server applies the edit and the
+  // linked balance changes in one database transaction. Currency and expense/income stay as they are.
+  let txCtx = null;
+  const txErr = (m) => { $("tx-err").textContent = m; $("tx-err").hidden = false; };
+  function openTx(t) {
+    txCtx = { t };
+    const inc = t.transaction_type === "Income", cur = t.currency;
+    $("tx-title").textContent = inc ? "Edit income" : "Edit expense";
+    $("tx-sym").textContent = SYM[cur] || cur;
+    $("tx-amount").setAttribute("inputmode", decimals(cur) ? "decimal" : "numeric");
+    $("tx-amount").value = groupDigits(Number(t.amount).toFixed(decimals(cur)), cur);
+    $("tx-item").value = t.item;
+    const cats = S.meta.categories.filter((c) => (!c.currency || c.currency === cur) && (inc ? c.kind !== "expense" : c.kind !== "income")).map((c) => c.name);
+    if (!cats.includes(t.category)) cats.unshift(t.category);          // a removed category still shows for old entries
+    $("tx-cat").replaceChildren(...cats.map((n) => el("option", { value: n, text: n })));
+    $("tx-cat").value = t.category;
+    const pms = payMethods(cur);
+    if (!pms.includes(t.which_bank)) pms.unshift(t.which_bank);
+    $("tx-pm").replaceChildren(...pms.map((n) => el("option", { value: n, text: n })));
+    $("tx-pm").value = t.which_bank;
+    $("tx-date").value = String(t.date).slice(0, 10);
+    $("tx-notes").value = t.notes || "";
+    $("tx-links").textContent = t.source_asset || t.target_asset
+      ? `Linked to ${[t.source_asset, t.target_asset].filter(Boolean).join(" → ")}. Saving updates these balances.` : "";
+    $("tx-err").hidden = true; $("tx-save").disabled = false;
+    const del = $("tx-delete"); del.dataset.armed = ""; del.classList.remove("confirm"); del.textContent = "Delete entry";
+    $("tx-dlg").showModal();
+  }
+  $("tx-amount").addEventListener("input", () => formatInput($("tx-amount"), txCtx?.t.currency || "MYR"));
+  $("tx-form-edit").addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "save") { txCtx = null; return; }
+    e.preventDefault();
+    const t = txCtx.t, body = {};
+    $("tx-err").hidden = true;
+    const amt = plain($("tx-amount").value);
+    if (!(Number(amt) > 0)) { $("tx-amount").focus(); return txErr("Enter an amount above zero."); }
+    if (Number(amt) !== Number(t.amount)) body.amount = amt;
+    const item = $("tx-item").value.replace(/\s+/g, " ").trim();
+    if (!item) { $("tx-item").focus(); return txErr("Enter a description."); }
+    if (item !== t.item) body.item = item;
+    if ($("tx-cat").value !== t.category) body.category = $("tx-cat").value;
+    if ($("tx-pm").value !== t.which_bank) body.which_bank = $("tx-pm").value;
+    const d = $("tx-date").value;
+    if (!d) { $("tx-date").focus(); return txErr("Pick a date."); }
+    if (d !== String(t.date).slice(0, 10)) body.date = d;
+    const notes = $("tx-notes").value.trim();
+    if (notes !== (t.notes || "")) body.notes = notes || null;
+    if (!Object.keys(body).length) { $("tx-dlg").close(); txCtx = null; return; }
+    $("tx-save").disabled = true;
+    try {
+      await api("PATCH", `/transactions/${t.transaction_id}`, body);
+      $("tx-dlg").close(); txCtx = null;
+      toast("Saved.");
+      loadRecent(); loadFormAssets(); loadReminders(true);
+      if (!$("dash").hidden) loadDash(true);
+      if ($("search-dlg").open) runSearch(false);
+    } catch (err) {
+      $("tx-save").disabled = false;
+      if (err instanceof ApiError && err.status === 404) { $("tx-dlg").close(); toast("That entry was already deleted."); loadRecent(); return; }
+      txErr(err instanceof ApiError ? errText(err) : "No connection. Edits need a connection; try again when you're online.");
+    }
+  });
+  $("tx-delete").addEventListener("click", () => {
+    const b = $("tx-delete");
+    if (!b.dataset.armed) { b.dataset.armed = "1"; b.classList.add("confirm"); b.textContent = "Tap again to delete"; return; }
+    const t = txCtx.t;
+    $("tx-dlg").close(); txCtx = null;
+    deleteEntity("expense", String(t.transaction_id), t);      // same optimistic path as a swipe (works offline too)
+  });
+
+  // ---------- search every transaction ----------
+  const SR = { rows: [], total: 0 };
+  function fillSearchLists() {
+    const cur = $("s-cur").value;
+    const keep = [$("s-cat").value, $("s-pm").value];
+    const uniq = (xs) => [...new Set(xs)].sort((a, b) => a.localeCompare(b));
+    const cats = uniq(S.meta.categories.filter((c) => !cur || !c.currency || c.currency === cur).map((c) => c.name));
+    const pms = uniq((S.meta.payment_methods || []).filter((b) => !cur || !b.currency || b.currency === cur).map((b) => b.name));
+    $("s-cat").replaceChildren(el("option", { value: "", text: "All" }), ...cats.map((n) => el("option", { value: n, text: n })));
+    $("s-pm").replaceChildren(el("option", { value: "", text: "All" }), ...pms.map((n) => el("option", { value: n, text: n })));
+    $("s-cat").value = cats.includes(keep[0]) ? keep[0] : "";
+    $("s-pm").value = pms.includes(keep[1]) ? keep[1] : "";
+  }
+  function openSearch() {
+    if ($("s-cur").options.length <= 1) {
+      $("s-cur").append(...curOrder().map((c) => el("option", { value: c, text: SYM[c] ? `${SYM[c]} (${c})` : c })));
+    }
+    fillSearchLists();
+    $("search-dlg").showModal();
+    if (!SR.rows.length) runSearch(false);
+    setTimeout(() => $("s-q").focus(), 50);
+  }
+  function searchQuery(offset) {
+    const p = new URLSearchParams();
+    const set = (k, v) => { if (v) p.set(k, v); };
+    set("q", $("s-q").value.trim()); set("from", $("s-from").value); set("to", $("s-to").value);
+    set("currency", $("s-cur").value); set("type", $("s-type").value);
+    set("category", $("s-cat").value); set("which_bank", $("s-pm").value);
+    set("min", plain($("s-min").value)); set("max", plain($("s-max").value));
+    p.set("limit", "50"); if (offset) p.set("offset", String(offset));
+    return p;
+  }
+  async function runSearch(more) {
+    $("s-err").hidden = true;
+    $("s-go").disabled = true; $("s-more").disabled = true;
+    try {
+      const r = await api("GET", "/transactions/search?" + searchQuery(more ? SR.rows.length : 0));
+      const gone = pendingDeletes("expense");
+      const rows = r.transactions.filter((t) => !gone.has(String(t.transaction_id)));
+      SR.rows = more ? [...SR.rows, ...rows] : rows; SR.total = r.total;
+      $("s-results").replaceChildren(...SR.rows.map(txRow));
+      if (!SR.rows.length) $("s-results").append(el("li", { class: "muted", text: "No transactions match." }));
+      const sums = Object.entries(r.totals || {}).map(([c, v]) =>
+        [Number(v.expenses) ? `spent ${money(v.expenses, c)}` : "", Number(v.income) ? `income ${money(v.income, c)}` : ""].filter(Boolean).join(", ")).filter(Boolean);
+      $("s-summary").textContent = `${r.total} match${r.total === 1 ? "" : "es"}${sums.length ? " · " + sums.join(" · ") : ""}` +
+        (SR.rows.length < r.total ? ` · showing ${SR.rows.length}` : "");
+      $("s-more").hidden = SR.rows.length >= r.total;
+    } catch (e) {
+      $("s-err").textContent = e instanceof ApiError ? errText(e) : "No connection. Search needs a connection.";
+      $("s-err").hidden = false;
+    } finally { $("s-go").disabled = false; $("s-more").disabled = false; }
+  }
+  $("search-open").addEventListener("click", openSearch);
+  $("s-close").addEventListener("click", () => $("search-dlg").close());
+  $("s-cur").addEventListener("change", fillSearchLists);
+  $("search-form").addEventListener("submit", (e) => { e.preventDefault(); runSearch(false); });
+  $("s-more").addEventListener("click", () => runSearch(true));
+  $("s-clear").addEventListener("click", () => {
+    for (const id of ["s-q", "s-from", "s-to", "s-min", "s-max"]) $(id).value = "";
+    for (const id of ["s-cur", "s-type", "s-cat", "s-pm"]) $(id).value = "";
+    fillSearchLists(); runSearch(false);
+  });
+
+  // ---------- keyboard: arrow keys move through radio chip groups and segmented controls ----------
+  // One tab stop per group (the selected option); Left/Up and Right/Down move and select, Home/End jump.
+  const radiosIn = (g) => [...g.querySelectorAll(':scope > [role="radio"]')];
+  function syncRoving(g) {
+    const rs = radiosIn(g);
+    if (!rs.length) return;
+    const cur = rs.find((r) => r.getAttribute("aria-checked") === "true") || rs[0];
+    for (const r of rs) r.tabIndex = r === cur ? 0 : -1;
+  }
+  document.addEventListener("keydown", (e) => {
+    const btn = e.target.closest?.('[role="radio"]');
+    const g = btn?.parentElement;
+    if (!btn || g?.getAttribute("role") !== "radiogroup") return;
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (step === undefined && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const rs = radiosIn(g);
+    let i = rs.indexOf(btn);
+    i = e.key === "Home" ? 0 : e.key === "End" ? rs.length - 1 : (i + step + rs.length) % rs.length;
+    rs[i].click();
+    const now = radiosIn(g)[i] || rs[i];        // the group may have re-rendered on select
+    now.focus(); syncRoving(g);
+  });
+  new MutationObserver((muts) => {
+    const groups = new Set();
+    for (const m of muts) { const g = m.target.closest?.('[role="radiogroup"]'); if (g) groups.add(g); }
+    groups.forEach(syncRoving);
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-checked"] });
 
   // ---------- charts (hand-drawn SVG) ----------
   // Colours: 8 categorical slots, --s1..--s8 in styles.css (validated for colour-blind separation in
@@ -1047,8 +1264,8 @@
       const inc = t.transaction_type === "Income";
       const links = (t.source_asset ? ` · ${t.source_asset}` : "") + (t.target_asset ? ` → ${t.target_asset}` : "");
       return swipeable(el("li", { "data-tx": String(t.transaction_id), tabindex: "0",
-                                  "aria-label": `${t.item}, ${money(t.amount, cur)}. Swipe left or press Enter to delete.`,
-                                  onclick: () => askDelete(t), onkeydown: (e) => { if (e.key === "Enter") askDelete(t); } },
+                                  "aria-label": `${t.item}, ${money(t.amount, cur)}. Press Enter to edit; swipe left to delete.`,
+                                  onclick: () => openTx(t), onkeydown: (e) => { if (e.key === "Enter") openTx(t); } },
         el("span", { class: "c-date", text: t.date.slice(5) }),
         el("span", { class: "c-item" }, el("span", { class: "c-item-t", text: t.item }), el("span", { class: "sub", text: `${t.category}, ${t.which_bank}${links}` })),
         el("span", { class: "c-cat", text: t.category }),
@@ -1439,7 +1656,53 @@
     renderReminderViews();
     if (R.pendingOpen) { const id = R.pendingOpen; R.pendingOpen = null; openReminderById(id); }
   }
-  function renderReminderViews() { renderUpcoming(); renderReminderList(); renderBadge(); }
+  function renderReminderViews() { renderUpcoming(); renderReminderList(); renderBadge(); renderDue(); }
+
+  // ---------- recurring transactions: due reminders with full details, confirmed one by one ----------
+  // A reminder with an amount, category and payment method that is due (today or overdue) shows on the
+  // Add tab. Log = record the expense on its due date and schedule the next one; Skip = mark it done
+  // without logging. Nothing is ever logged without a tap.
+  function dueToLog() {
+    const today = todayLocal();
+    return R.list.filter((r) => !r.isCompleted && !r.transactionId && r.amount !== null && r.amount !== undefined && r.amount !== ""
+                              && r.category && r.paymentMethod && String(r.date) <= today)
+      .sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt));
+  }
+  function renderDue() {
+    const list = dueToLog();
+    $("due-panel").hidden = list.length === 0;
+    $("due-list").replaceChildren(...list.map((r) => {
+      const skip = el("button", { type: "button", class: "ghost due-btn", text: "Skip", "aria-label": `Skip ${r.title} without logging` });
+      const log = el("button", { type: "button", class: "primary due-btn", text: "Log", "aria-label": `Log ${r.title}, ${remAmount(r)}` });
+      skip.addEventListener("click", () => dueAct(r, false, [skip, log]));
+      log.addEventListener("click", () => dueAct(r, true, [skip, log]));
+      return el("li", { class: "due-item" },
+        el("button", { type: "button", class: "due-main", onclick: () => askComplete(r), "aria-label": `${r.title}: review before logging` },
+          el("span", { class: "t1", text: r.title }),
+          el("span", { class: "t2", text: `${remAmount(r)} · ${r.category} · ${r.paymentMethod} · ${schedText(r)}${r.repeat !== "Once" ? " · ↻ " + r.repeat : ""}` })),
+        el("span", { class: "due-acts" }, skip, log));
+    }));
+  }
+  async function dueAct(r, log, btns) {
+    btns.forEach((b) => (b.disabled = true));
+    try {
+      const day = String(r.date) <= todayLocal() ? String(r.date) : todayLocal();
+      const res = await api("POST", `/reminders/${r.id}/complete`, log ? { createExpense: true, date: day } : undefined);
+      upsertLocal(res.reminder);
+      if (res.next) upsertLocal(res.next);
+      const next = res.next ? ` Next: ${schedText(res.next)}.` : "";
+      if (log && res.transaction) {
+        S.lastSavedId = res.expense_logged ? res.transaction.transaction_id : null;
+        toast(`Logged ${r.title} · ${remAmount(r)}.${next}`, { undo: !!res.expense_logged, ms: 7000 });
+        loadRecent(); loadFormAssets();
+        if (!$("dash").hidden) loadDash(true);
+      } else toast(`Skipped ${r.title}.${next}`);
+      loadReminders(true);
+    } catch (e) {
+      btns.forEach((b) => (b.disabled = false));
+      toast(`Couldn't ${log ? "log" : "skip"} ${r.title}: ${e instanceof ApiError ? errText(e) : "no connection"}`, { bad: true, ms: 7000 });
+    }
+  }
 
   function remItem(r) {
     const st = remStatus(r), amt = remAmount(r);
@@ -1885,6 +2148,7 @@
     if (tab !== "reminders" && tab !== "dash") loadReminders(true);   // tab badge
     initPush();
     if (tab === "add") setTimeout(() => $("amount").focus(), 50);
+    renderSync();
     flushQueue().finally(loadRecent);
     loadFormAssets();
   }

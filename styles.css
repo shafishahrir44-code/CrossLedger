@@ -478,3 +478,43 @@ dialog { --swipe-surface: var(--surface); }
 .rem-item.swipe { display: block; }
 .rem-item.swipe > .swipe-fg { display: flex; align-items: center; gap: 8px; }
 @media (prefers-reduced-motion: reduce) { .swipe > .swipe-fg { transition: none !important; } }
+
+/* ---------- offline changes bar ---------- */
+.sync-bar {
+  position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  margin: 0 0 8px; padding: 8px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line);
+  font-size: 14px;
+}
+.sync-bar::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-2); flex: none; }
+.sync-bar.bad { border-color: var(--over); }
+.sync-bar.bad::before { background: var(--over); }
+.sync-bar #sync-text { flex: 1; }
+.sync-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+.sync-item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sync-item .t-main { flex: 1; min-width: 0; }
+.sync-item .t1 { font-weight: 550; }
+.sync-item .t2 { font-size: 13px; color: var(--ink-2); }
+.sync-item.failed .t2 { color: var(--over); }
+.danger-link { color: var(--over); min-height: 44px; }
+
+/* ---------- recurring: due to log ---------- */
+.due-panel { margin-top: 12px; }
+.due-panel h2 { margin: 0 0 4px; }
+.due-list { list-style: none; margin: 0; padding: 0; }
+.due-item { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+.due-item:last-child { border-bottom: 0; }
+.due-main { flex: 1; min-width: 0; display: grid; gap: 2px; text-align: left; background: none; border: 0; padding: 10px 0; min-height: 52px; }
+.due-main .t1 { font-weight: 600; }
+.due-main .t2 { font-size: 13px; color: var(--ink-2); }
+.due-acts { display: flex; gap: 6px; flex: none; }
+.due-btn { min-height: 40px; padding: 0 14px; font-size: 14px; }
+
+/* ---------- search sheet ---------- */
+dialog.sheet { width: min(96vw, 560px); max-height: 92vh; overflow: auto; }
+#s-results { margin-top: 4px; }
+
+/* ---------- keyboard focus in pickers ---------- */
+.chips button:focus-visible, .pills button:focus-visible, .seg button:focus-visible, .due-main:focus-visible {
+  outline: 3px solid var(--exp); outline-offset: 2px;
+}
+.tx-list li.swipe:focus-visible { outline: 2px solid var(--exp); outline-offset: -2px; }

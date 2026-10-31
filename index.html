@@ -35,6 +35,12 @@
     </form>
   </section>
 
+  <!-- offline changes waiting to be sent (all tabs) -->
+  <div id="sync-bar" class="sync-bar" role="status" hidden>
+    <span id="sync-text"></span>
+    <button type="button" class="link" id="sync-open">View</button>
+  </div>
+
   <!-- Entry -->
   <section id="add" class="screen" hidden>
     <header class="topbar">
@@ -44,6 +50,12 @@
       </div>
       <div class="seg seg-cur" role="radiogroup" aria-label="Currency" id="cur-seg"></div>
     </header>
+
+    <!-- recurring reminders with full details that are due: confirm each one before it is logged -->
+    <section class="panel due-panel" id="due-panel" aria-labelledby="due-title" hidden>
+      <h2 id="due-title">Due to log</h2>
+      <ul class="due-list" id="due-list"></ul>
+    </section>
 
     <form id="tx-form" autocomplete="off" novalidate>
       <label class="amount-wrap" for="amount">
@@ -145,7 +157,10 @@
     </section>
 
     <section class="panel">
-      <h2>Transactions</h2>
+      <div class="panel-head">
+        <h2>Transactions</h2>
+        <button type="button" class="link" id="search-open">Search all</button>
+      </div>
       <div class="filters">
         <select id="f-type" aria-label="Type"><option value="">All types</option><option>Expense</option><option>Income</option></select>
         <select id="f-cat" aria-label="Category"><option value="">All categories</option></select>
@@ -248,6 +263,78 @@
       <div class="row">
         <button value="cancel" class="ghost" type="submit">Keep</button>
         <button id="del-yes" class="danger" value="delete" type="submit">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- edit an entry -->
+  <dialog id="tx-dlg">
+    <form method="dialog" id="tx-form-edit" class="stack" novalidate>
+      <h2 id="tx-title">Edit expense</h2>
+      <label class="field"><span>Amount</span>
+        <span class="budget-input"><span id="tx-sym">RM</span><input id="tx-amount" inputmode="decimal" autocomplete="off"></span></label>
+      <label class="field"><span>Description</span><input id="tx-item" maxlength="120" autocomplete="off"></label>
+      <div class="two">
+        <label class="field"><span>Category</span><select id="tx-cat"></select></label>
+        <label class="field"><span>Payment method</span><select id="tx-pm"></select></label>
+      </div>
+      <label class="field"><span>Date</span><input id="tx-date" type="date"></label>
+      <label class="field"><span>Notes <span class="optional">(optional)</span></span><textarea id="tx-notes" maxlength="500" rows="2"></textarea></label>
+      <p class="muted small" id="tx-links"></p>
+      <p id="tx-err" class="error" role="alert" hidden></p>
+      <div class="row">
+        <button value="cancel" formnovalidate class="ghost" type="submit">Cancel</button>
+        <button id="tx-save" class="primary" value="save" type="submit">Save</button>
+      </div>
+      <button type="button" id="tx-delete" class="remove-link">Delete entry</button>
+    </form>
+  </dialog>
+
+  <!-- search every transaction -->
+  <dialog id="search-dlg" class="sheet" aria-labelledby="search-title">
+    <form method="dialog" id="search-form" class="stack" novalidate>
+      <div class="panel-head">
+        <h2 id="search-title">Search transactions</h2>
+        <button type="button" class="link" id="s-close">Close</button>
+      </div>
+      <label class="field"><span class="sr-only">Text</span>
+        <input id="s-q" type="search" maxlength="100" placeholder="Description or notes" autocomplete="off" enterkeyhint="search"></label>
+      <div class="two">
+        <label class="field"><span>From</span><input id="s-from" type="date"></label>
+        <label class="field"><span>To</span><input id="s-to" type="date"></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>Currency</span><select id="s-cur"><option value="">All</option></select></label>
+        <label class="field"><span>Type</span><select id="s-type"><option value="">All</option><option value="expense">Expense</option><option value="income">Income</option></select></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>Category</span><select id="s-cat"><option value="">All</option></select></label>
+        <label class="field"><span>Payment method</span><select id="s-pm"><option value="">All</option></select></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>Min amount</span><input id="s-min" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+        <label class="field"><span>Max amount</span><input id="s-max" inputmode="decimal" autocomplete="off" placeholder="Any"></label>
+      </div>
+      <div class="row">
+        <button type="button" class="ghost" id="s-clear">Clear</button>
+        <button type="submit" class="primary" value="search" id="s-go">Search</button>
+      </div>
+      <p class="muted small" id="s-summary" aria-live="polite"></p>
+      <p id="s-err" class="error" role="alert" hidden></p>
+      <ul class="tx-list" id="s-results" aria-label="Search results"></ul>
+      <button type="button" class="ghost" id="s-more" hidden>Load more</button>
+    </form>
+  </dialog>
+
+  <!-- offline changes -->
+  <dialog id="sync-dlg" aria-labelledby="sync-title">
+    <form method="dialog" class="stack">
+      <h2 id="sync-title">Waiting to sync</h2>
+      <p class="muted small" id="sync-help"></p>
+      <ul class="sync-list" id="sync-list"></ul>
+      <div class="row">
+        <button value="close" class="ghost" type="submit">Close</button>
+        <button type="button" class="primary" id="sync-retry">Retry now</button>
       </div>
     </form>
   </dialog>
