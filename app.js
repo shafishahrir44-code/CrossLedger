@@ -37,8 +37,7 @@
     monthTx: [],
     assets: store.get("assets", []),        // for the entry form's account / target pickers
     assetCats: store.get("assetCats", []),
-    acctFor: store.get("acctFor", {}),      // "MYR|Maybank" -> asset_id to deduct from (0 = don't)
-    targetFor: store.get("targetFor", {}),  // "MYR|Gold" -> asset_id the purchase adds to (0 = none)
+    dashSummary: null,                      // last /summary, adjusted locally on optimistic deletes
   };
   const SYM = { MYR: "RM", KRW: "₩" };
   const decimals = (cur) => (S.meta?.currencies.find((c) => c.code === cur)?.minor_units ?? 2);
@@ -180,16 +179,23 @@
     renderBanks();
   }
   // Chips for a user-managed list, ending with a "+" chip. In edit mode a tap opens the editor.
-  function renderPickList(container, names, current, { editing, onPick, onEdit, onAdd, addLabel }) {
-    const chips = names.map((v) => el("button", {
+  const ASSET_TYPE_LABEL = { investment: "investment", commodity: "commodity", savings: "savings" };
+  function renderPickList(container, names, current, { editing, onPick, onEdit, onAdd, addLabel, badge = () => null }) {
+    const chips = names.map((v) => {
+      const type = badge(v);
+      const chip = el("button", {
       type: "button", role: editing ? null : "radio", "aria-checked": editing ? null : String(v === current), "data-v": v, text: v,
-      "aria-label": editing ? `Edit ${v}` : null,
+      "aria-label": editing ? `Edit ${v}` : type ? `${v}, adds to your ${ASSET_TYPE_LABEL[type]} assets` : null,
       onclick: () => {
         if (editing) return onEdit(v);
         onPick(v);
         for (const b of container.children) if (!b.classList.contains("chip-add")) b.setAttribute("aria-checked", String(b.dataset.v === v));
       },
-    }));
+      });
+      // asset-building categories (Gold, ASB, Savings) get a small "+" badge
+      if (type) { chip.classList.add("chip-asset"); chip.title = `Adds to your ${ASSET_TYPE_LABEL[type]} assets`; chip.append(el("span", { class: "chip-badge", "aria-hidden": "true", text: "+" })); }
+      return chip;
+    });
     for (const c of chips) for (const a of ["role", "aria-checked", "aria-label"]) if (c.getAttribute(a) === "null") c.removeAttribute(a);
     chips.push(el("button", { type: "button", class: "chip-add", "aria-label": addLabel, text: "+", onclick: onAdd }));
     container.replaceChildren(...chips);
@@ -198,6 +204,8 @@
   const inCur = (x) => !x.currency || x.currency === S.currency;
   const curCats = () => S.meta.categories.filter(inCur);
   const findCat = (name) => curCats().find((c) => c.name === name);
+  // "investment" | "commodity" | "savings" for asset-building categories, "" for plain expenses
+  const catAssetType = (c) => (c?.is_asset ?? (c?.asset_type && c.asset_type !== "expense")) ? c.asset_type : "";
   function catsForType() {
     return curCats().filter((c) => c.kind === S.type || c.kind === "both").map((c) => c.name);
   }
@@ -218,6 +226,7 @@
       onEdit: (c) => openItem("cat", c),
       onAdd: () => openItem("cat", null),
       addLabel: "Add category",
+      badge: (c) => catAssetType(findCat(c)) || null,
     });
     const hint = $("cat-hint");
     hint.hidden = cats.length > 0 && !S.editCats;
@@ -247,71 +256,53 @@
     renderLinks();
   }
 
-  // ---------- linked assets: "Deduct from account" and, for asset categories, "Add to asset" ----------
-  // An expense can be paid from a bank-account asset (its value goes down) and, when its category buys an
-  // asset (Gold, Stocks...), add its cost to that asset. The server moves both in one database transaction.
+  // ---------- automatic asset links ----------
+  // Each payment method is an account asset: an expense is taken from it (income is added). A category
+  // tagged as an asset type (Gold, ASB, Savings) also adds the cost to its asset. The server does both,
+  // in the same database transaction as the entry; the form only shows what will happen.
   const assetName = (a) => a.name || a.category;
-  const acctKey = () => `${S.currency}|${S.bankByCur[S.currency] || ""}`;
-  const targetKey = () => `${S.currency}|${S.category || ""}`;
-  async function loadFormAssets() {
-    try { const r = await api("GET", "/assets"); setFormAssets(r.assets, r.categories); } catch { /* keep the cached list */ }
-  }
+  // one fetch keeps the form hints AND the Assets tab (list, history, charts) current, so an asset
+  // created by an entry (first Gold purchase) is already there when the tab opens
+  const loadFormAssets = () => loadAssets(true);
   function setFormAssets(list, cats) {
     S.assets = list || []; store.set("assets", S.assets);
     if (cats) { S.assetCats = cats.map((c) => (typeof c === "string" ? c : c.name)); store.set("assetCats", S.assetCats); }
     renderLinks();
   }
-  function fillAssetSelect(sel, list, noneText, pick) {
-    sel.replaceChildren(el("option", { value: "", text: noneText }),
-      ...list.map((a) => el("option", { value: String(a.asset_id), text: `${assetName(a)} · ${money(a.value ?? 0, a.currency)}` })));
-    sel.value = list.some((a) => String(a.asset_id) === String(pick)) ? String(pick) : "";
+  const pmAsset = (name = S.bankByCur[S.currency], cur = S.currency) => {
+    const id = S.meta?.payment_methods?.find((p) => p.name === name && p.currency === cur)?.asset_id;
+    return id ? S.assets.find((a) => a.asset_id === id) || null : null;
+  };
+  // the asset an asset-building category adds to (same rule as the server): the asset named exactly like
+  // the category in this currency, or a new one with that name
+  function catTarget(catName = S.category) {
+    const c = findCat(catName);
+    if (!catAssetType(c) || S.type !== "expense") return null;
+    const src = pmAsset();
+    const hit = S.assets.find((a) => a.currency === S.currency && (a.name || "").toLowerCase() === c.name.toLowerCase()
+                                     && a.asset_id !== src?.asset_id);
+    return hit || { name: c.name, value: 0, currency: S.currency, isNew: true };
   }
+  // one line under the payment methods: "Maybank savings RM 987.50 → RM 975.00 · Gold +RM 12.50"
   function renderLinks() {
-    if (!S.meta || !$("acct")) return;
-    const expense = S.type === "expense";
-    // pay-from: this currency's bank-account assets; remembered per payment method (Cash -> none, Maybank -> Maybank savings)
-    const accts = S.assets.filter((a) => a.currency === S.currency && a.account);
-    $("acct-wrap").hidden = !expense || accts.length === 0;
-    const remembered = S.acctFor[acctKey()];
-    fillAssetSelect($("acct"), accts, "Don't deduct", remembered === undefined ? accts[0]?.asset_id : remembered);
-    // target: only when the category is linked to an asset category
-    const acat = expense ? findCat(S.category)?.asset_category : null;
-    $("target-wrap").hidden = !acat;
-    if (acat) {
-      const src = $("acct").value;
-      const targets = S.assets.filter((a) => a.currency === S.currency && a.category === acat && String(a.asset_id) !== src);
-      $("target-label").textContent = `Add to ${acat} asset`;
-      const t = S.targetFor[targetKey()];
-      fillAssetSelect($("target"), targets, "Don't add to an asset", t === undefined ? targets[0]?.asset_id : t);
-      $("target").disabled = targets.length === 0;
-      $("target-hint").textContent = targets.length ? "Its value goes up by the amount paid."
-        : `No ${SYM[S.currency] || S.currency} ${acat} asset yet. Add one in Assets first.`;
-    }
-    linkHints();
-  }
-  // live "before → after" under each picker as the amount is typed
-  function linkHints() {
+    const h = $("pm-bal");
+    if (!S.meta || !h) return;
+    const a = pmAsset();
     const amt = Number(plain($("amount").value)) || 0;
-    const a = S.assets.find((x) => String(x.asset_id) === $("acct").value);
-    const h = $("acct-hint");
-    h.classList.remove("error");
-    if (!a) h.textContent = "";
-    else {
-      const after = Number(a.value ?? 0) - amt;
-      h.textContent = amt ? `${assetName(a)}: ${money(a.value ?? 0, a.currency)} → ${money(after, a.currency)}` : `Balance ${money(a.value ?? 0, a.currency)}`;
-      if (after < 0) { h.textContent += " · not enough in this account"; h.classList.add("error"); }
+    const sign = S.type === "income" ? 1 : -1;
+    const parts = [];
+    if (a) {
+      const now = Number(a.value ?? 0), after = now + sign * amt;
+      parts.push(amt ? `${assetName(a)} ${money(now, a.currency)} → ${money(after, a.currency)}` : `${assetName(a)} ${money(now, a.currency)}`);
     }
-    const t = S.assets.find((x) => String(x.asset_id) === $("target").value);
-    if (t && !$("target-wrap").hidden && amt) $("target-hint").textContent = `${assetName(t)}: ${money(t.value ?? 0, t.currency)} → ${money(Number(t.value ?? 0) + amt, t.currency)}`;
+    const t = catTarget();
+    if (t) parts.push(amt ? `${t.isNew ? "new " : ""}${assetName(t)} asset +${money(amt, S.currency)}`
+                          : `adds to ${t.isNew ? "a new " : "your "}${assetName(t)} asset`);
+    h.textContent = parts.join(" · ");
+    h.hidden = parts.length === 0;
+    h.classList.toggle("neg", !!a && Number(a.value ?? 0) + sign * amt < 0);
   }
-  $("acct").addEventListener("change", () => {
-    S.acctFor[acctKey()] = Number($("acct").value) || 0; store.set("acctFor", S.acctFor);
-    renderLinks();
-  });
-  $("target").addEventListener("change", () => {
-    S.targetFor[targetKey()] = Number($("target").value) || 0; store.set("targetFor", S.targetFor);
-    linkHints();
-  });
+  const linkHints = renderLinks;
   function toggleEdit(which) {
     const key = which === "cat" ? "editCats" : "editBanks";
     S[key] = !S[key];
@@ -334,7 +325,7 @@
   function showBudgetFields() {
     // budgets are for spending: hidden for payment methods and Income categories
     $("item-budget-wrap").hidden = !itemCtx || itemCtx.list !== "cat" || itemCtx.kind === "income";
-    $("item-acat-wrap").hidden = $("item-budget-wrap").hidden;
+    $("item-atype-wrap").hidden = $("item-budget-wrap").hidden;
   }
   function budgetChanges() {
     // returns [{currency, amount|null}] for inputs that differ from what's saved
@@ -363,10 +354,7 @@
     $("item-kind-wrap").hidden = !isCat;
     if (isCat) setItemKind(itemCtx.kind);
     itemCtx.budgets = existing?.budgets || {};
-    itemCtx.acat = existing?.asset_category || "";
-    const acats = [...new Set([...S.assetCats, ...(itemCtx.acat ? [itemCtx.acat] : [])])];
-    $("item-acat").replaceChildren(el("option", { value: "", text: "No" }), ...acats.map((n) => el("option", { value: n, text: n })));
-    $("item-acat").value = itemCtx.acat;
+    $("item-atype").value = catAssetType(existing);
     $("item-budgets").replaceChildren(...S.meta.currencies.filter((c) => c.code === S.currency).map((c) => {
       const cur = existing?.budgets?.[c.code];
       const input = el("input", { id: `item-budget-${c.code}`, inputmode: c.minor_units ? "decimal" : "numeric",
@@ -421,8 +409,8 @@
     try {
       let r = null;
       const existing = list === "cat" && original ? findCat(original) : null;
-      const acat = list === "cat" && kind !== "income" ? $("item-acat").value : "";
-      const acatChanged = list === "cat" && acat !== (existing?.asset_category || "");
+      const atype = list === "cat" && kind !== "income" ? $("item-atype").value : "";
+      const acatChanged = list === "cat" && atype !== catAssetType(existing);
       const catChanged = !original || name !== original || (list === "cat" && existing && (existing.kind !== kind || acatChanged));
       if (list === "acat") {
         if (!original) r = await api("POST", "/asset-categories", { name });
@@ -431,10 +419,10 @@
         if (r) await afterAssetCatChange(original, r.asset_category.name, r.message);
         return;
       }
-      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency, ...(acat ? { asset_category: acat } : {}) } : { name, currency });
+      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency, ...(atype ? { asset_type: atype } : {}) } : { name, currency });
       else if (list === "cat" && catChanged) {
         r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind, currency,
-                                      ...(acatChanged ? { asset_category: acat || null } : {}) });
+                                      ...(acatChanged ? { asset_type: atype || null } : {}) });
       }
       else if (list === "bank" && name !== original) r = await api("PATCH", path, { name: original, new_name: name, currency });
       const saved = r ? (r.category || r.payment_method).name : original;
@@ -496,14 +484,7 @@
       which_bank: S.bankByCur[S.currency],
       date: $("date").value || todayLocal(),
       notes: $("notes").value.trim() || undefined,
-      ...linkedIds(),
     };
-  }
-  function linkedIds() {
-    if (S.type !== "expense") return {};
-    const src = $("acct-wrap").hidden ? 0 : Number($("acct").value) || 0;
-    const tgt = $("target-wrap").hidden ? 0 : Number($("target").value) || 0;
-    return { ...(src ? { source_asset_id: src } : {}), ...(tgt ? { target_asset_id: tgt } : {}) };
   }
 
   // Offline queue: a failed network send keeps its request_id, so replaying
@@ -574,7 +555,7 @@
       toast(moved ? `Logged · ${moved}` : "Logged successfully", { undo: !r.duplicate, ms: 5000 });
       resetForm();
       loadRecent();
-      if (r.assets?.length) { renderLinks(); loadFormAssets(); }
+      if (r.assets?.length) { renderLinks(); loadFormAssets(); if (!$("assets").hidden) loadAssets(true); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { showSetup("Your API key was rejected. Enter it again."); }
       else if (err instanceof ApiError && err.status < 500) {
@@ -606,12 +587,12 @@
   function txRow(t) {
     const inc = t.transaction_type === "Income";
     const links = (t.source_asset ? ` · from ${t.source_asset}` : "") + (t.target_asset ? ` → ${t.target_asset}` : "");
-    return swipeable(el("li", {},
+    return swipeable(el("li", { tabindex: "0", "aria-label": `${t.item}, ${money(t.amount, t.currency)}. Swipe left or press Enter to delete.`,
+                                onclick: () => askDelete(t), onkeydown: (e) => { if (e.key === "Enter") askDelete(t); } },
       el("div", { class: "t-main" }, el("div", { class: "t1", text: t.item }), el("div", { class: "t2", text: `${t.category}, ${t.which_bank}, ${t.date}${links}` })),
       el("div", { class: "t-right" },
-        el("div", { class: "amt num" + (inc ? " inc" : ""), text: (inc ? "+" : "") + money(t.amount, t.currency) }),
-        el("button", { type: "button", class: "del-btn", "aria-label": `Delete ${t.item}`, text: "Delete",
-                       onclick: () => askDelete(t) }))), { entity: "expense", id: t.transaction_id });
+        el("div", { class: "amt num" + (inc ? " inc" : ""), text: (inc ? "+" : "") + money(t.amount, t.currency) }))),
+      { entity: "expense", id: t.transaction_id, tx: t });
   }
 
   // ---------- swipe to delete (Latest entries and reminders; touch only) ----------
@@ -621,12 +602,13 @@
   const SWIPE_OPEN = 80, SWIPE_FULL = 200, SWIPE_SLOP = 8;
   let swOpen = null, drag = null;
   const buzz = (ms) => { try { navigator.vibrate?.(ms); } catch { /* unsupported (iOS Safari) */ } };
-  function swipeable(li, { entity, id }) {
+  function swipeable(li, { entity, id, tx = null }) {
     li.classList.add("swipe");
+    li._tx = tx;
     li.dataset.entity = entity; li.dataset.id = String(id);
     const fg = el("div", { class: "swipe-fg" }, ...li.childNodes);   // the row's own content, moved (listeners kept)
     const act = el("button", { type: "button", class: "swipe-act", tabindex: "-1", "aria-hidden": "true" }, el("span", { text: "Delete" }));
-    act.addEventListener("click", () => commitSwipe(li));
+    act.addEventListener("click", (e) => { e.stopPropagation(); commitSwipe(li); });   // not the row's own tap
     li.replaceChildren(act, fg);
     return li;
   }
@@ -640,7 +622,7 @@
     fgOf(li).style.transform = "translateX(-100%)";
     buzz(50);
     if (swOpen === li) swOpen = null;
-    setTimeout(() => { li.remove(); deleteEntity(li.dataset.entity, li.dataset.id); }, 200);
+    setTimeout(() => { li.remove(); deleteEntity(li.dataset.entity, li.dataset.id, li._tx); }, 200);
   }
   // a swipe (or a tap that only closes an open row) must not also count as a tap on the row
   let noClickUntil = 0, noClickRow = null;
@@ -688,10 +670,61 @@
   document.addEventListener("touchend", endDrag, { passive: true });
   document.addEventListener("touchcancel", endDrag, { passive: true });
 
+  // Optimistic delete: drop the row everywhere, take it out of the dashboard totals ("Spent vs. budget",
+  // category bars, donut) and give its amount back to the linked account / take it off the asset,
+  // before the API answers. The next server refresh replaces these local numbers.
+  function optimisticRemoveTx(id, t) {
+    t = t || S.monthTx.find((x) => String(x.transaction_id) === id);
+    S.monthTx = S.monthTx.filter((x) => String(x.transaction_id) !== id);
+    for (const li of document.querySelectorAll(`li.swipe[data-entity="expense"][data-id="${CSS.escape(id)}"]`)) {
+      if (!li.classList.contains("swipe-gone")) li.remove();
+    }
+    if (!t) return;
+    const amt = Number(t.amount), inc = t.transaction_type === "Income";
+    const s = S.dashSummary;
+    if (s && s.currency === t.currency && s.month === String(t.date).slice(0, 7)) {
+      const k = s.kpi;
+      if (inc) { k.total_income = Number(k.total_income) - amt; k.net = Number(k.net) - amt; }
+      else {
+        k.total_expenses = Number(k.total_expenses) - amt; k.net = Number(k.net) + amt;
+        if (k.monthly_budget !== null) {
+          k.remaining_budget = Number(k.monthly_budget) - k.total_expenses;
+          k.budget_used_pct = Math.round(k.total_expenses / Number(k.monthly_budget) * 10000) / 100;
+          k.over_budget = k.remaining_budget < 0;
+        }
+        const c = s.by_category.find((x) => x.category === t.category);
+        if (c) {
+          c.amount = Math.max(0, Number(c.amount) - amt);
+          if (c.budget !== null && c.budget !== undefined) {
+            c.remaining = Number(c.budget) - c.amount;
+            c.used_pct = Math.round(c.amount / Number(c.budget) * 10000) / 100;
+            c.over = c.amount > Number(c.budget);
+          } else if (c.amount === 0) s.by_category = s.by_category.filter((x) => x !== c);
+          s.by_category.sort((a, b) => Number(b.amount) - Number(a.amount));
+        }
+      }
+      renderDash(s, s.currency);
+      renderTable(s.currency);
+    }
+    // balances: the account gets the money back (or loses refunded income), the asset loses the cost
+    const move = (assetId, delta) => {
+      if (assetId == null) return;
+      // S.assets and A.list usually hold the same objects: move each one once
+      const hit = new Set([S.assets, A.list].map((l) => l.find((x) => x.asset_id === assetId)).filter(Boolean));
+      for (const a of hit) a.value = Number(a.value ?? 0) + delta;
+    };
+    move(t.source_asset_id, inc ? -amt : amt);
+    move(t.target_asset_id, -amt);
+    store.set("assets", S.assets);
+    renderLinks();
+    if (!$("assets").hidden) renderAssets();
+  }
+
   // delete from a swipe: online -> API now; offline -> queued for the next connection
-  async function deleteEntity(entity, id) {
+  async function deleteEntity(entity, id, tx = null) {
     const job = { type: "DELETE", entity, id: String(id) };
     if (entity === "expense" && String(S.lastSavedId) === String(id)) S.lastSavedId = null;
+    if (entity === "expense") optimisticRemoveTx(String(id), tx);
     if (entity === "reminder") {
       R.list = R.list.filter((x) => String(x.id) !== String(id)); R.completed = R.completed.filter((x) => String(x.id) !== String(id));
       renderReminderViews();
@@ -711,11 +744,15 @@
           return;
         }
         toast("Couldn't delete: " + e.message, { bad: true, ms: 7000 });   // put the row back
+        if (entity === "expense") { loadRecent(); loadFormAssets(); if (!$("dash").hidden) loadDash(true); }
+        else loadReminders(true);
+        return;
       }
     }
     if (entity === "expense") {
       toast("Deleted.");
-      loadRecent(); loadFormAssets(); loadReminders(true);                  // balances and reminder links change
+      // reconcile with the server (the screen already shows the result)
+      loadRecent(); loadFormAssets(); loadReminders(true);
       if (!$("dash").hidden) loadDash(true);
       if (!$("assets").hidden) loadAssets(true);
     } else {
@@ -744,6 +781,7 @@
       $("del-dlg").close();
       pendingDelete = null;
       if (String(S.lastSavedId) === String(t.transaction_id)) S.lastSavedId = null;
+      optimisticRemoveTx(String(t.transaction_id), t);
       toast(`Deleted ${t.item}.`);
       loadRecent(); loadFormAssets();
       if (!$("dash").hidden) loadDash(true);
@@ -881,6 +919,7 @@
         api("GET", `/summary?month=${month}&currency=${cur}`),
         api("GET", `/transactions?limit=200&currency=${cur}&month=${month}`),
       ]);
+      S.dashSummary = s;
       renderDash(s, cur);
       const gone = pendingDeletes("expense");
       S.monthTx = t.transactions.filter((x) => !gone.has(String(x.transaction_id))); renderTable(cur);
@@ -951,12 +990,18 @@
     const rows = S.monthTx.filter((t) => (!ft || t.transaction_type === ft) && (!fc || t.category === fc) && (!fb || t.which_bank === fb));
     $("tx-body").replaceChildren(...rows.map((t) => {
       const inc = t.transaction_type === "Income";
-      return el("tr", { "data-id": String(t.transaction_id), onclick: () => askDelete(t) },
-        el("td", { text: t.date.slice(5) }), el("td", { class: "item" }, el("div", { text: t.item }), el("div", { class: "sub", text: `${t.category}, ${t.which_bank}` })), el("td", { text: t.category }),
-        el("td", { class: "r num" + (inc ? " inc" : ""), text: (inc ? "+" : "") + money(t.amount, cur) }),
-        el("td", { text: t.which_bank }), el("td", { text: t.transaction_type }));
+      const links = (t.source_asset ? ` · ${t.source_asset}` : "") + (t.target_asset ? ` → ${t.target_asset}` : "");
+      return swipeable(el("li", { "data-tx": String(t.transaction_id), tabindex: "0",
+                                  "aria-label": `${t.item}, ${money(t.amount, cur)}. Swipe left or press Enter to delete.`,
+                                  onclick: () => askDelete(t), onkeydown: (e) => { if (e.key === "Enter") askDelete(t); } },
+        el("span", { class: "c-date", text: t.date.slice(5) }),
+        el("span", { class: "c-item" }, el("span", { class: "c-item-t", text: t.item }), el("span", { class: "sub", text: `${t.category}, ${t.which_bank}${links}` })),
+        el("span", { class: "c-cat", text: t.category }),
+        el("span", { class: "c-amt r num" + (inc ? " inc" : ""), text: (inc ? "+" : "") + money(t.amount, cur) }),
+        el("span", { class: "c-bank", text: t.which_bank }),
+        el("span", { class: "c-type", text: t.transaction_type })), { entity: "expense", id: t.transaction_id, tx: t });
     }));
-    if (!rows.length) $("tx-body").append(el("tr", {}, el("td", { colspan: "6", class: "muted", text: "No transactions match." })));
+    if (!rows.length) $("tx-body").append(el("li", { class: "muted tx-empty", text: "No transactions match." }));
   }
   ["f-type", "f-cat", "f-bank"].forEach((id) => $(id).addEventListener("change", () => renderTable(S.dashCurrency)));
   $("month").addEventListener("change", () => loadDash());
@@ -1050,7 +1095,8 @@
     // earlier values (the current one is already shown on the right)
     const hist = A.history.filter((h) => h.asset_id === a.asset_id && h.date !== a.value_date).slice(-3).reverse();
     const short = (d) => (d.slice(0, 4) === todayLocal().slice(0, 4) ? fmtDay(d).replace(/ \d{4}$/, "") : fmtDay(d));
-    const sub = [a.account ? "Bank account" : null, a.value_date ? "updated " + fmtDay(a.value_date) : null, a.notes].filter(Boolean).join(" · ");
+    const pmName = S.meta?.payment_methods?.find((p) => p.asset_id === a.asset_id)?.name;
+    const sub = [pmName ? `Payment method: ${pmName}` : null, a.value_date ? "updated " + fmtDay(a.value_date) : null, a.notes].filter(Boolean).join(" · ");
     return el("li", { class: "asset-row", tabindex: "0", role: "button", "aria-label": `Edit ${a.name || a.category}`,
                       onclick: () => openAsset(a), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAsset(a); } } },
       el("div", { class: "t-main" },
@@ -1219,7 +1265,6 @@
     $("asset-cur-wrap").classList.toggle("locked", !!a);
     $("asset-name").value = a?.name ?? "";
     $("asset-notes").value = a?.notes ?? "";
-    $("asset-account").checked = !!a?.account;
     $("asset-value").value = a?.value != null ? groupDigits(Number(a.value).toFixed(decimals(a.currency)), a.currency) : "";
     // date the value applies to: today by default. Editing: a new value is added on this date (history kept);
     // changing only the date moves the last update to that date.
@@ -1252,20 +1297,18 @@
     if (!category) { $("asset-err").textContent = "Pick an asset category (or tap + to add one)."; $("asset-err").hidden = false; return; }
     if (value === "" || !(Number(value) >= 0)) { $("asset-err").textContent = "Enter the current value (0 or more)."; $("asset-err").hidden = false; $("asset-value").focus(); return; }
     const name = $("asset-name").value.trim(), notes = $("asset-notes").value.trim();
-    const account = $("asset-account").checked;
     const date = $("asset-date").value || todayLocal();
     if (date > todayLocal()) { $("asset-err").textContent = "The date can't be in the future."; $("asset-err").hidden = false; return; }
     $("asset-save").disabled = true;
     try {
       if (!A.ctx.id) {
         await api("POST", "/assets", { category, value, currency: A.ctx.currency, date,
-                                       ...(name ? { name } : {}), ...(notes ? { notes } : {}), ...(account ? { account } : {}) });
+                                       ...(name ? { name } : {}), ...(notes ? { notes } : {}) });
       } else {
         const o = A.ctx.original, body = {};
         if (category !== o.category) body.category = category;
         if (name !== (o.name ?? "")) body.name = name;
         if (notes !== (o.notes ?? "")) body.notes = notes;
-        if (account !== !!o.account) body.account = account;
         if (Number(value) !== Number(o.value)) { body.value = value; body.date = date; }
         else if (date !== A.ctx.dateDefault && o.value_date && date !== o.value_date) { body.date = date; body.move_from = o.value_date; }
         if (Object.keys(body).length) await api("PATCH", `/assets/${A.ctx.id}`, body);

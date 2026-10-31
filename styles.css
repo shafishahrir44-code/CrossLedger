@@ -141,19 +141,27 @@ body.over .mid, body.over #k-used { color: var(--over); }
 
 .filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
 .filters select { font-size: 14px; padding: 8px; min-height: 38px; }
-.table-wrap { overflow-x: auto; }
-.tx-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.tx-table th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.tx-table td { padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.tx-table td.item { white-space: normal; min-width: 120px; }
+/* dashboard transactions: a list laid out as columns (rows are swipeable) */
+.tx-grid { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.tx-grid-head, .tx-grid li > .swipe-fg {
+  display: grid; grid-template-columns: 46px minmax(120px, 2fr) minmax(70px, 1fr) auto minmax(70px, 1fr) 62px;
+  gap: 0 10px; align-items: center;
+}
+.tx-grid-head { font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.tx-grid li { border-bottom: 1px solid var(--line); cursor: pointer; }
+.tx-grid li > .swipe-fg { padding: 9px 0; min-height: 44px; }
+.tx-grid li > .swipe-fg > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tx-grid .c-item { display: grid; white-space: normal; }
+.tx-grid .c-item-t { overflow: hidden; text-overflow: ellipsis; }
+.tx-grid .sub { display: none; font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.tx-grid .tx-empty { padding: 12px 0; cursor: default; }
+.tx-grid li:focus-visible { outline: 2px solid var(--exp); outline-offset: -2px; }
 .r { text-align: right; }
-.tx-table .sub { display: none; font-size: 12px; color: var(--ink-2); }
 @media (max-width: 560px) {
-  .tx-table th:nth-child(3), .tx-table td:nth-child(3),
-  .tx-table th:nth-child(5), .tx-table td:nth-child(5),
-  .tx-table th:nth-child(6), .tx-table td:nth-child(6) { display: none; }
-  .tx-table .sub { display: block; }
-  .tx-table td.item { min-width: 0; width: 100%; }
+  .tx-grid-head, .tx-grid li > .swipe-fg { grid-template-columns: 44px minmax(0, 1fr) auto; }
+  .tx-grid-head span:nth-child(3), .tx-grid-head span:nth-child(5), .tx-grid-head span:nth-child(6),
+  .tx-grid .c-cat, .tx-grid .c-bank, .tx-grid .c-type { display: none; }
+  .tx-grid .sub { display: block; white-space: nowrap; }
 }
 
 /* tabs, toast, dialog */
@@ -194,11 +202,6 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
 .tx-list li { align-items: center; }
 .tx-list .t-main { flex: 1; min-width: 0; }
 .tx-list .t-right { display: flex; align-items: center; gap: 4px; }
-.del-btn {
-  border: 0; background: transparent; color: var(--ink-2); min-width: 44px; min-height: 44px;
-  border-radius: 10px; font-size: 13px; padding: 0 6px;
-}
-.del-btn:hover, .del-btn:focus-visible { color: var(--over); background: var(--over-soft); }
 .tx-table tbody tr[data-id] { cursor: pointer; }
 .tx-table tbody tr[data-id]:active td { background: var(--over-soft); }
 .tx-table td.act { width: 1%; padding: 0 2px; }
@@ -436,9 +439,18 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
 #rem-cat-hint { color: var(--over); }
 
 /* ---------- linked assets on the entry form ---------- */
-#acct-hint.error { color: var(--over); }
-.check-row { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
-.check-row input { width: 22px; height: 22px; flex: none; margin: 0; accent-color: var(--ink); }
+.pm-bal { margin: 8px 2px 0; }
+.pm-bal.neg { color: var(--over); }
+/* asset-building category chips (Gold, ASB, Savings): a small gold "+" */
+:root { --asset: #a8760a; --asset-soft: #f6ead0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --asset: #e3b54a; --asset-soft: #3a2f14; } }
+:root[data-theme="dark"] { --asset: #e3b54a; --asset-soft: #3a2f14; }
+.chips button.chip-asset { position: relative; }
+.chip-badge {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; margin-left: 6px; vertical-align: 1px;
+  border-radius: 50%; background: var(--asset-soft); color: var(--asset); font-size: 12px; font-weight: 700; line-height: 1;
+}
+.editing .chips button.chip-asset .chip-badge { display: none; }
 
 /* ---------- swipe to delete ----------
    li.swipe (relative, clips)            the row and its bottom border
