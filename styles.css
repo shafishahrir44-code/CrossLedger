@@ -434,3 +434,35 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); }
 .done-log:empty { display: none; }
 #done-dlg { max-height: 92vh; overflow-y: auto; }
 #rem-cat-hint { color: var(--over); }
+
+/* ---------- linked assets on the entry form ---------- */
+#acct-hint.error { color: var(--over); }
+.check-row { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.check-row input { width: 22px; height: 22px; flex: none; margin: 0; accent-color: var(--ink); }
+
+/* ---------- swipe to delete ----------
+   li.swipe (relative, clips)            the row and its bottom border
+     button.swipe-act (absolute, red)    under the content; "Delete" in its rightmost 80px
+     div.swipe-fg (opaque, translateX)   the row's content, slides left over it */
+.swipe { position: relative; overflow: hidden; touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+.swipe > .swipe-act {
+  position: absolute; inset: 0; display: flex; justify-content: flex-end; align-items: center;
+  border: 0; border-radius: 0; padding: 0; margin: 0; background: var(--over); color: #fff;
+  font: inherit; font-weight: 650; font-size: 15px; cursor: pointer;
+}
+.swipe > .swipe-act span { width: 80px; text-align: center; }
+.swipe > .swipe-fg {
+  position: relative; z-index: 1; background: var(--swipe-surface, var(--bg));
+  transition: transform 200ms cubic-bezier(.2, .8, .2, 1); will-change: transform;
+}
+.swipe.swiping > .swipe-fg { transition: none; }
+.swipe.swipe-gone > .swipe-fg { transition: transform 200ms ease-in; }
+.swipe.swipe-armed > .swipe-act span { transform: scale(1.08); }
+.panel { --swipe-surface: var(--surface); }
+dialog { --swipe-surface: var(--surface); }
+/* the row's own layout moves onto the sliding layer */
+.tx-list li.swipe { display: block; padding: 0; }
+.tx-list li.swipe > .swipe-fg { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px 0; }
+.rem-item.swipe { display: block; }
+.rem-item.swipe > .swipe-fg { display: flex; align-items: center; gap: 8px; }
+@media (prefers-reduced-motion: reduce) { .swipe > .swipe-fg { transition: none !important; } }

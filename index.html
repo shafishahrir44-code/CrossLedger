@@ -68,6 +68,15 @@
         <div class="pills" id="bank-pills" role="radiogroup" aria-labelledby="bank-label"></div>
         <p id="bank-hint" class="muted small list-hint" hidden></p>
       </div>
+
+      <!-- expenses only: which bank-account asset pays (its value goes down) -->
+      <label class="field" id="acct-wrap" hidden><span>Deduct from account</span>
+        <select id="acct"></select>
+        <span class="muted small" id="acct-hint"></span></label>
+      <!-- shown when the category buys an asset (Gold, Stocks...): that asset's value goes up -->
+      <label class="field" id="target-wrap" hidden><span id="target-label">Add to asset</span>
+        <select id="target"></select>
+        <span class="muted small" id="target-hint"></span></label>
       <p id="form-err" class="error" role="alert" hidden></p>
 
       <label class="field"><span>Date</span><input id="date" type="date"></label>
@@ -222,6 +231,9 @@
           <button type="button" role="radio" data-kind="income" aria-checked="false">Income</button>
           <button type="button" role="radio" data-kind="both" aria-checked="false">Both</button>
         </div></div>
+      <label class="field" id="item-acat-wrap"><span>Buys an asset <span class="optional">(optional)</span></span>
+        <select id="item-acat"></select>
+        <span class="muted small">e.g. Gold: each expense adds its cost to a Gold asset you pick.</span></label>
       <div class="field" id="item-budget-wrap">
         <span id="item-budget-label">Monthly budget <span class="optional">(optional)</span></span>
         <div class="budget-row" id="item-budgets" role="group" aria-labelledby="item-budget-label"></div>
@@ -260,6 +272,8 @@
         <p id="asset-cat-hint" class="muted small list-hint" hidden></p></div>
       <label class="field"><span>Name <span class="optional">(optional)</span></span>
         <input id="asset-name" maxlength="60" autocomplete="off" autocapitalize="words" placeholder="e.g. Maybank savings, Public Gold 10 g"></label>
+      <label class="check-row"><input type="checkbox" id="asset-account">
+        <span>Bank account <span class="muted small">— expenses can be paid from it</span></span></label>
       <label class="field"><span>Current value</span>
         <span class="budget-input"><span id="asset-sym">RM</span><input id="asset-value" inputmode="decimal" autocomplete="off" placeholder="0.00"></span></label>
       <label class="field"><span>Date</span>

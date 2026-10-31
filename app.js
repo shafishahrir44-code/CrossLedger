@@ -35,6 +35,10 @@
     lastSavedId: null,
     dashTimer: null,
     monthTx: [],
+    assets: store.get("assets", []),        // for the entry form's account / target pickers
+    assetCats: store.get("assetCats", []),
+    acctFor: store.get("acctFor", {}),      // "MYR|Maybank" -> asset_id to deduct from (0 = don't)
+    targetFor: store.get("targetFor", {}),  // "MYR|Gold" -> asset_id the purchase adds to (0 = none)
   };
   const SYM = { MYR: "RM", KRW: "₩" };
   const decimals = (cur) => (S.meta?.currencies.find((c) => c.code === cur)?.minor_units ?? 2);
@@ -109,6 +113,7 @@
       toast("Deleted.");
       loadRecent(); if (!$("dash").hidden) loadDash();
       loadReminders(true);   // an expense logged from a reminder is unlinked from it
+      loadFormAssets();      // a linked account / asset got its amount back
     } catch (e) { toast("Couldn't undo: " + e.message, { bad: true }); }
   });
 
@@ -209,7 +214,7 @@
     if (!cats.includes(S.category)) S.category = cats[0] ?? null;
     renderPickList($("cat-chips"), cats, S.category, {
       editing: S.editCats,
-      onPick: (c) => { S.category = c; store.set(catKey(), c); $("form-err").hidden = true; },
+      onPick: (c) => { S.category = c; store.set(catKey(), c); $("form-err").hidden = true; renderLinks(); },
       onEdit: (c) => openItem("cat", c),
       onAdd: () => openItem("cat", null),
       addLabel: "Add category",
@@ -219,6 +224,7 @@
     hint.textContent = S.editCats ? "Tap a category to rename it, change its type or remove it."
       : `Tap + to add your first ${SYM[S.currency] || S.currency} ${S.type} category.`;
     $("cat-edit").hidden = curCats().length === 0;
+    renderLinks();
   }
   function renderBanks() {
     const banks = banksForCur();
@@ -227,7 +233,7 @@
     S.bankByCur[S.currency] = cur;
     renderPickList($("bank-pills"), banks, cur, {
       editing: S.editBanks,
-      onPick: (b) => { S.bankByCur[S.currency] = b; store.set("bankByCur", S.bankByCur); $("form-err").hidden = true; },
+      onPick: (b) => { S.bankByCur[S.currency] = b; store.set("bankByCur", S.bankByCur); $("form-err").hidden = true; renderLinks(); },
       onEdit: (b) => openItem("bank", b),
       onAdd: () => openItem("bank", null),
       addLabel: "Add payment method",
@@ -238,7 +244,74 @@
       : (S.currency === "KRW" ? "Tap + to add a ₩ payment method, e.g. Cash, KakaoBank, T-money."
         : `Tap + to add a ${SYM[S.currency] || S.currency} payment method, e.g. Cash, Maybank, Touch 'n Go.`);
     $("bank-edit").hidden = banks.length === 0;
+    renderLinks();
   }
+
+  // ---------- linked assets: "Deduct from account" and, for asset categories, "Add to asset" ----------
+  // An expense can be paid from a bank-account asset (its value goes down) and, when its category buys an
+  // asset (Gold, Stocks...), add its cost to that asset. The server moves both in one database transaction.
+  const assetName = (a) => a.name || a.category;
+  const acctKey = () => `${S.currency}|${S.bankByCur[S.currency] || ""}`;
+  const targetKey = () => `${S.currency}|${S.category || ""}`;
+  async function loadFormAssets() {
+    try { const r = await api("GET", "/assets"); setFormAssets(r.assets, r.categories); } catch { /* keep the cached list */ }
+  }
+  function setFormAssets(list, cats) {
+    S.assets = list || []; store.set("assets", S.assets);
+    if (cats) { S.assetCats = cats.map((c) => (typeof c === "string" ? c : c.name)); store.set("assetCats", S.assetCats); }
+    renderLinks();
+  }
+  function fillAssetSelect(sel, list, noneText, pick) {
+    sel.replaceChildren(el("option", { value: "", text: noneText }),
+      ...list.map((a) => el("option", { value: String(a.asset_id), text: `${assetName(a)} · ${money(a.value ?? 0, a.currency)}` })));
+    sel.value = list.some((a) => String(a.asset_id) === String(pick)) ? String(pick) : "";
+  }
+  function renderLinks() {
+    if (!S.meta || !$("acct")) return;
+    const expense = S.type === "expense";
+    // pay-from: this currency's bank-account assets; remembered per payment method (Cash -> none, Maybank -> Maybank savings)
+    const accts = S.assets.filter((a) => a.currency === S.currency && a.account);
+    $("acct-wrap").hidden = !expense || accts.length === 0;
+    const remembered = S.acctFor[acctKey()];
+    fillAssetSelect($("acct"), accts, "Don't deduct", remembered === undefined ? accts[0]?.asset_id : remembered);
+    // target: only when the category is linked to an asset category
+    const acat = expense ? findCat(S.category)?.asset_category : null;
+    $("target-wrap").hidden = !acat;
+    if (acat) {
+      const src = $("acct").value;
+      const targets = S.assets.filter((a) => a.currency === S.currency && a.category === acat && String(a.asset_id) !== src);
+      $("target-label").textContent = `Add to ${acat} asset`;
+      const t = S.targetFor[targetKey()];
+      fillAssetSelect($("target"), targets, "Don't add to an asset", t === undefined ? targets[0]?.asset_id : t);
+      $("target").disabled = targets.length === 0;
+      $("target-hint").textContent = targets.length ? "Its value goes up by the amount paid."
+        : `No ${SYM[S.currency] || S.currency} ${acat} asset yet. Add one in Assets first.`;
+    }
+    linkHints();
+  }
+  // live "before → after" under each picker as the amount is typed
+  function linkHints() {
+    const amt = Number(plain($("amount").value)) || 0;
+    const a = S.assets.find((x) => String(x.asset_id) === $("acct").value);
+    const h = $("acct-hint");
+    h.classList.remove("error");
+    if (!a) h.textContent = "";
+    else {
+      const after = Number(a.value ?? 0) - amt;
+      h.textContent = amt ? `${assetName(a)}: ${money(a.value ?? 0, a.currency)} → ${money(after, a.currency)}` : `Balance ${money(a.value ?? 0, a.currency)}`;
+      if (after < 0) { h.textContent += " · not enough in this account"; h.classList.add("error"); }
+    }
+    const t = S.assets.find((x) => String(x.asset_id) === $("target").value);
+    if (t && !$("target-wrap").hidden && amt) $("target-hint").textContent = `${assetName(t)}: ${money(t.value ?? 0, t.currency)} → ${money(Number(t.value ?? 0) + amt, t.currency)}`;
+  }
+  $("acct").addEventListener("change", () => {
+    S.acctFor[acctKey()] = Number($("acct").value) || 0; store.set("acctFor", S.acctFor);
+    renderLinks();
+  });
+  $("target").addEventListener("change", () => {
+    S.targetFor[targetKey()] = Number($("target").value) || 0; store.set("targetFor", S.targetFor);
+    linkHints();
+  });
   function toggleEdit(which) {
     const key = which === "cat" ? "editCats" : "editBanks";
     S[key] = !S[key];
@@ -261,6 +334,7 @@
   function showBudgetFields() {
     // budgets are for spending: hidden for payment methods and Income categories
     $("item-budget-wrap").hidden = !itemCtx || itemCtx.list !== "cat" || itemCtx.kind === "income";
+    $("item-acat-wrap").hidden = $("item-budget-wrap").hidden;
   }
   function budgetChanges() {
     // returns [{currency, amount|null}] for inputs that differ from what's saved
@@ -289,6 +363,10 @@
     $("item-kind-wrap").hidden = !isCat;
     if (isCat) setItemKind(itemCtx.kind);
     itemCtx.budgets = existing?.budgets || {};
+    itemCtx.acat = existing?.asset_category || "";
+    const acats = [...new Set([...S.assetCats, ...(itemCtx.acat ? [itemCtx.acat] : [])])];
+    $("item-acat").replaceChildren(el("option", { value: "", text: "No" }), ...acats.map((n) => el("option", { value: n, text: n })));
+    $("item-acat").value = itemCtx.acat;
     $("item-budgets").replaceChildren(...S.meta.currencies.filter((c) => c.code === S.currency).map((c) => {
       const cur = existing?.budgets?.[c.code];
       const input = el("input", { id: `item-budget-${c.code}`, inputmode: c.minor_units ? "decimal" : "numeric",
@@ -343,7 +421,9 @@
     try {
       let r = null;
       const existing = list === "cat" && original ? findCat(original) : null;
-      const catChanged = !original || name !== original || (list === "cat" && existing && existing.kind !== kind);
+      const acat = list === "cat" && kind !== "income" ? $("item-acat").value : "";
+      const acatChanged = list === "cat" && acat !== (existing?.asset_category || "");
+      const catChanged = !original || name !== original || (list === "cat" && existing && (existing.kind !== kind || acatChanged));
       if (list === "acat") {
         if (!original) r = await api("POST", "/asset-categories", { name });
         else if (name !== original) r = await api("PATCH", "/asset-categories", { name: original, new_name: name });
@@ -351,8 +431,11 @@
         if (r) await afterAssetCatChange(original, r.asset_category.name, r.message);
         return;
       }
-      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency } : { name, currency });
-      else if (list === "cat" && catChanged) r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind, currency });
+      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency, ...(acat ? { asset_category: acat } : {}) } : { name, currency });
+      else if (list === "cat" && catChanged) {
+        r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind, currency,
+                                      ...(acatChanged ? { asset_category: acat || null } : {}) });
+      }
       else if (list === "bank" && name !== original) r = await api("PATCH", path, { name: original, new_name: name, currency });
       const saved = r ? (r.category || r.payment_method).name : original;
       if (r) {
@@ -413,22 +496,55 @@
       which_bank: S.bankByCur[S.currency],
       date: $("date").value || todayLocal(),
       notes: $("notes").value.trim() || undefined,
+      ...linkedIds(),
     };
+  }
+  function linkedIds() {
+    if (S.type !== "expense") return {};
+    const src = $("acct-wrap").hidden ? 0 : Number($("acct").value) || 0;
+    const tgt = $("target-wrap").hidden ? 0 : Number($("target").value) || 0;
+    return { ...(src ? { source_asset_id: src } : {}), ...(tgt ? { target_asset_id: tgt } : {}) };
   }
 
   // Offline queue: a failed network send keeps its request_id, so replaying
   // can never create a duplicate.
+  // Swipe-deletes made offline are queued too, as { type: "DELETE", entity: "expense"|"reminder", id }.
   const queue = () => store.get("queue", []);
+  const DEL_PATH = { expense: (id) => `/transactions/${id}`, reminder: (id) => `/reminders/${id}` };
+  function enqueue(job) {
+    const q = queue(); q.push(job); store.set("queue", q);
+    // Chrome / Android: ask sw.js to wake the app when the connection is back (iOS has no Background
+    // Sync, so there the queue is sent when the app is next opened or comes back online)
+    navigator.serviceWorker?.ready.then((reg) => reg.sync?.register("ledger-queue")).catch(() => {});
+  }
+  const pendingDeletes = (entity) => new Set(queue().filter((j) => j.type === "DELETE" && j.entity === entity).map((j) => String(j.id)));
+  let flushing = false;
   async function flushQueue() {
     const q = queue();
-    if (!q.length || !S.key) return;
+    if (!q.length || !S.key || flushing) return;
+    flushing = true;
     const left = [];
-    for (const body of q) {
-      try { await api("POST", "/transactions", body); }
-      catch (e) { if (!(e instanceof ApiError) || e.status >= 500) left.push(body); }
+    let sentTx = 0, sentDel = 0;
+    for (const job of q) {
+      try {
+        if (job.type === "DELETE") { await api("DELETE", DEL_PATH[job.entity](job.id)); sentDel++; }
+        else { await api("POST", "/transactions", job); sentTx++; }
+      } catch (e) {
+        if (job.type === "DELETE" && e instanceof ApiError && e.status === 404) { sentDel++; continue; }  // already gone
+        if (!(e instanceof ApiError) || e.status >= 500) left.push(job);
+      }
     }
-    store.set("queue", left);
-    if (left.length < q.length) { toast(`Sent ${q.length - left.length} saved-offline entr${q.length - left.length === 1 ? "y" : "ies"}.`); loadRecent(); }
+    // keep anything queued while this ran
+    const added = queue().slice(q.length);
+    store.set("queue", [...left, ...added]);
+    flushing = false;
+    const n = sentTx + sentDel;
+    if (n) {
+      toast(`Synced ${n} offline change${n === 1 ? "" : "s"}.`);
+      loadRecent(); loadFormAssets();
+      if (sentDel) loadReminders(true);
+      if (!$("dash").hidden) loadDash(true);
+    }
   }
 
   $("tx-form").addEventListener("submit", async (e) => {
@@ -449,9 +565,16 @@
     try {
       const r = await api("POST", "/transactions", body);
       S.lastSavedId = r.transaction.transaction_id;
-      toast("Logged successfully", { undo: !r.duplicate, ms: 5000 });
+      // new balances straight from the response, so the pickers are right before the refresh lands
+      for (const a of r.assets || []) {
+        const local = S.assets.find((x) => x.asset_id === a.asset_id);
+        if (local) local.value = Number(a.value);
+      }
+      const moved = (r.assets || []).map((a) => `${a.name} ${money(a.value, a.currency)}`).join(" · ");
+      toast(moved ? `Logged · ${moved}` : "Logged successfully", { undo: !r.duplicate, ms: 5000 });
       resetForm();
       loadRecent();
+      if (r.assets?.length) { renderLinks(); loadFormAssets(); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { showSetup("Your API key was rejected. Enter it again."); }
       else if (err instanceof ApiError && err.status < 500) {
@@ -468,23 +591,137 @@
     $("amount").value = ""; formatInput($("amount"), S.currency);
     $("item").value = ""; $("notes").value = ""; $("date").value = todayLocal();
     S.requestId = uuid();
+    linkHints();
   }
 
   async function loadRecent() {
     try {
       const r = await api("GET", "/transactions?limit=8");
+      const gone = pendingDeletes("expense");
+      r.transactions = r.transactions.filter((t) => !gone.has(String(t.transaction_id)));
       $("recent-list").replaceChildren(...r.transactions.map(txRow));
       if (!r.transactions.length) $("recent-list").append(el("li", { class: "muted", text: "Nothing yet. Your entries appear here." }));
     } catch { /* stay quiet on the entry screen */ }
   }
   function txRow(t) {
     const inc = t.transaction_type === "Income";
-    return el("li", {},
-      el("div", { class: "t-main" }, el("div", { class: "t1", text: t.item }), el("div", { class: "t2", text: `${t.category}, ${t.which_bank}, ${t.date}` })),
+    const links = (t.source_asset ? ` · from ${t.source_asset}` : "") + (t.target_asset ? ` → ${t.target_asset}` : "");
+    return swipeable(el("li", {},
+      el("div", { class: "t-main" }, el("div", { class: "t1", text: t.item }), el("div", { class: "t2", text: `${t.category}, ${t.which_bank}, ${t.date}${links}` })),
       el("div", { class: "t-right" },
         el("div", { class: "amt num" + (inc ? " inc" : ""), text: (inc ? "+" : "") + money(t.amount, t.currency) }),
         el("button", { type: "button", class: "del-btn", "aria-label": `Delete ${t.item}`, text: "Delete",
-                       onclick: () => askDelete(t) })));
+                       onclick: () => askDelete(t) }))), { entity: "expense", id: t.transaction_id });
+  }
+
+  // ---------- swipe to delete (Latest entries and reminders; touch only) ----------
+  // Drag left past 80px: the row stays open at -80px over a red "Delete" zone (light haptic).
+  // Past 200px, or a tap on the red zone: the row slides off, is removed after 200ms, then deleted.
+  // Rows use touch-action: pan-y and every listener is passive, so vertical scrolling is never blocked.
+  const SWIPE_OPEN = 80, SWIPE_FULL = 200, SWIPE_SLOP = 8;
+  let swOpen = null, drag = null;
+  const buzz = (ms) => { try { navigator.vibrate?.(ms); } catch { /* unsupported (iOS Safari) */ } };
+  function swipeable(li, { entity, id }) {
+    li.classList.add("swipe");
+    li.dataset.entity = entity; li.dataset.id = String(id);
+    const fg = el("div", { class: "swipe-fg" }, ...li.childNodes);   // the row's own content, moved (listeners kept)
+    const act = el("button", { type: "button", class: "swipe-act", tabindex: "-1", "aria-hidden": "true" }, el("span", { text: "Delete" }));
+    act.addEventListener("click", () => commitSwipe(li));
+    li.replaceChildren(act, fg);
+    return li;
+  }
+  const fgOf = (li) => li.querySelector(":scope > .swipe-fg");
+  function setX(li, x) { fgOf(li).style.transform = x ? `translateX(${x}px)` : ""; }
+  function openSwipe(li) { setX(li, -SWIPE_OPEN); li.classList.add("swipe-open"); swOpen = li; }
+  function closeSwipe(li) { if (!li) return; setX(li, 0); li.classList.remove("swipe-open", "swipe-armed"); if (swOpen === li) swOpen = null; }
+  function commitSwipe(li) {
+    if (li.classList.contains("swipe-gone")) return;
+    li.classList.add("swipe-gone"); li.classList.remove("swipe-open");
+    fgOf(li).style.transform = "translateX(-100%)";
+    buzz(50);
+    if (swOpen === li) swOpen = null;
+    setTimeout(() => { li.remove(); deleteEntity(li.dataset.entity, li.dataset.id); }, 200);
+  }
+  // a swipe (or a tap that only closes an open row) must not also count as a tap on the row
+  let noClickUntil = 0, noClickRow = null;
+  document.addEventListener("click", (e) => {
+    if (Date.now() < noClickUntil && noClickRow?.contains(e.target) && !e.target.closest(".swipe-act")) {
+      e.preventDefault(); e.stopPropagation();
+    }
+  }, true);
+  document.addEventListener("touchstart", (e) => {
+    const li = e.target.closest?.("li.swipe");
+    if (swOpen && swOpen !== li) closeSwipe(swOpen);       // touching anywhere else closes the open row
+    drag = null;
+    if (!li || e.touches.length !== 1 || li.classList.contains("swipe-gone") || e.target.closest(".swipe-act")) return;
+    const t = e.touches[0];
+    drag = { li, x0: t.clientX, y0: t.clientY, base: li === swOpen ? -SWIPE_OPEN : 0, x: 0, axis: null,
+             wasOpen: li === swOpen, pastOpen: li === swOpen };
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!drag) return;
+    const t = e.touches[0], dx = t.clientX - drag.x0, dy = t.clientY - drag.y0;
+    if (!drag.axis) {
+      if (Math.abs(dx) < SWIPE_SLOP && Math.abs(dy) < SWIPE_SLOP) return;
+      drag.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      if (drag.axis === "y") { if (!drag.wasOpen) drag = null; return; }   // vertical: leave it to the page
+      drag.li.classList.add("swiping");                                     // no transition while following the finger
+    }
+    if (drag.axis !== "x") return;
+    drag.x = Math.min(0, drag.base + dx);
+    setX(drag.li, drag.x);
+    const past = -drag.x >= SWIPE_OPEN;
+    if (past && !drag.pastOpen) buzz(20);
+    drag.pastOpen = past;
+    drag.li.classList.toggle("swipe-armed", -drag.x >= SWIPE_FULL);
+  }, { passive: true });
+  function endDrag() {
+    if (!drag) return;
+    const d = drag; drag = null;
+    d.li.classList.remove("swiping", "swipe-armed");
+    if (d.axis === "x" || d.wasOpen) { noClickUntil = Date.now() + 400; noClickRow = d.li; }
+    if (d.axis !== "x") { if (d.wasOpen) closeSwipe(d.li); return; }       // a tap on an open row closes it
+    if (-d.x >= SWIPE_FULL) commitSwipe(d.li);
+    else if (-d.x >= SWIPE_OPEN) openSwipe(d.li);
+    else closeSwipe(d.li);
+  }
+  document.addEventListener("touchend", endDrag, { passive: true });
+  document.addEventListener("touchcancel", endDrag, { passive: true });
+
+  // delete from a swipe: online -> API now; offline -> queued for the next connection
+  async function deleteEntity(entity, id) {
+    const job = { type: "DELETE", entity, id: String(id) };
+    if (entity === "expense" && String(S.lastSavedId) === String(id)) S.lastSavedId = null;
+    if (entity === "reminder") {
+      R.list = R.list.filter((x) => String(x.id) !== String(id)); R.completed = R.completed.filter((x) => String(x.id) !== String(id));
+      renderReminderViews();
+    }
+    if (!navigator.onLine) {
+      enqueue(job);
+      toast("Offline: deleted here, will sync when you're back online.");
+      return;
+    }
+    try {
+      await api("DELETE", DEL_PATH[entity](id));
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) {                  // 404 = already deleted
+        if (!(e instanceof ApiError) || e.status >= 500) {
+          enqueue(job);
+          toast("No connection. It will be deleted when you're back online.", { bad: true, ms: 7000 });
+          return;
+        }
+        toast("Couldn't delete: " + e.message, { bad: true, ms: 7000 });   // put the row back
+      }
+    }
+    if (entity === "expense") {
+      toast("Deleted.");
+      loadRecent(); loadFormAssets(); loadReminders(true);                  // balances and reminder links change
+      if (!$("dash").hidden) loadDash(true);
+      if (!$("assets").hidden) loadAssets(true);
+    } else {
+      toast("Reminder deleted.");
+      loadReminders(true);
+    }
   }
 
   // ---------- delete any entry (with confirmation) ----------
@@ -508,7 +745,7 @@
       pendingDelete = null;
       if (String(S.lastSavedId) === String(t.transaction_id)) S.lastSavedId = null;
       toast(`Deleted ${t.item}.`);
-      loadRecent();
+      loadRecent(); loadFormAssets();
       if (!$("dash").hidden) loadDash(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
@@ -645,7 +882,8 @@
         api("GET", `/transactions?limit=200&currency=${cur}&month=${month}`),
       ]);
       renderDash(s, cur);
-      S.monthTx = t.transactions; renderTable(cur);
+      const gone = pendingDeletes("expense");
+      S.monthTx = t.transactions.filter((x) => !gone.has(String(x.transaction_id))); renderTable(cur);
       if (Date.now() - R.loadedAt > 30000) loadReminders(true); else renderUpcoming();
       $("updated").textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + ", refreshes every 15 s";
     } catch (e) {
@@ -743,7 +981,7 @@
   });
 
   $("budget-amt").addEventListener("input", () => formatInput($("budget-amt"), S.dashCurrency));
-  $("amount").addEventListener("input", () => formatInput($("amount"), S.currency));
+  $("amount").addEventListener("input", () => { formatInput($("amount"), S.currency); linkHints(); });
 
   // ---------- assets / net worth ----------
   // asset categories are a user-managed list (shared by RM and ₩): + to add, Edit to rename / remove
@@ -755,6 +993,7 @@
     try {
       const r = await api("GET", "/assets");
       A.list = r.assets; A.totals = r.totals; A.categories = r.categories; A.history = r.history || [];
+      setFormAssets(r.assets, r.categories);
       renderAssets();
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
@@ -811,7 +1050,7 @@
     // earlier values (the current one is already shown on the right)
     const hist = A.history.filter((h) => h.asset_id === a.asset_id && h.date !== a.value_date).slice(-3).reverse();
     const short = (d) => (d.slice(0, 4) === todayLocal().slice(0, 4) ? fmtDay(d).replace(/ \d{4}$/, "") : fmtDay(d));
-    const sub = [a.value_date ? "updated " + fmtDay(a.value_date) : null, a.notes].filter(Boolean).join(" · ");
+    const sub = [a.account ? "Bank account" : null, a.value_date ? "updated " + fmtDay(a.value_date) : null, a.notes].filter(Boolean).join(" · ");
     return el("li", { class: "asset-row", tabindex: "0", role: "button", "aria-label": `Edit ${a.name || a.category}`,
                       onclick: () => openAsset(a), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAsset(a); } } },
       el("div", { class: "t-main" },
@@ -980,6 +1219,7 @@
     $("asset-cur-wrap").classList.toggle("locked", !!a);
     $("asset-name").value = a?.name ?? "";
     $("asset-notes").value = a?.notes ?? "";
+    $("asset-account").checked = !!a?.account;
     $("asset-value").value = a?.value != null ? groupDigits(Number(a.value).toFixed(decimals(a.currency)), a.currency) : "";
     // date the value applies to: today by default. Editing: a new value is added on this date (history kept);
     // changing only the date moves the last update to that date.
@@ -1012,18 +1252,20 @@
     if (!category) { $("asset-err").textContent = "Pick an asset category (or tap + to add one)."; $("asset-err").hidden = false; return; }
     if (value === "" || !(Number(value) >= 0)) { $("asset-err").textContent = "Enter the current value (0 or more)."; $("asset-err").hidden = false; $("asset-value").focus(); return; }
     const name = $("asset-name").value.trim(), notes = $("asset-notes").value.trim();
+    const account = $("asset-account").checked;
     const date = $("asset-date").value || todayLocal();
     if (date > todayLocal()) { $("asset-err").textContent = "The date can't be in the future."; $("asset-err").hidden = false; return; }
     $("asset-save").disabled = true;
     try {
       if (!A.ctx.id) {
         await api("POST", "/assets", { category, value, currency: A.ctx.currency, date,
-                                       ...(name ? { name } : {}), ...(notes ? { notes } : {}) });
+                                       ...(name ? { name } : {}), ...(notes ? { notes } : {}), ...(account ? { account } : {}) });
       } else {
         const o = A.ctx.original, body = {};
         if (category !== o.category) body.category = category;
         if (name !== (o.name ?? "")) body.name = name;
         if (notes !== (o.notes ?? "")) body.notes = notes;
+        if (account !== !!o.account) body.account = account;
         if (Number(value) !== Number(o.value)) { body.value = value; body.date = date; }
         else if (date !== A.ctx.dateDefault && o.value_date && date !== o.value_date) { body.date = date; body.move_from = o.value_date; }
         if (Object.keys(body).length) await api("PATCH", `/assets/${A.ctx.id}`, body);
@@ -1088,7 +1330,9 @@
   async function loadReminders(silent = false) {
     try {
       const r = await api("GET", "/reminders");
-      R.list = r.reminders; R.completed = r.completed; R.devices = r.push_devices ?? 0; R.loadedAt = Date.now(); R.missing = false;
+      const gone = pendingDeletes("reminder");
+      R.list = r.reminders.filter((x) => !gone.has(String(x.id))); R.completed = r.completed.filter((x) => !gone.has(String(x.id)));
+      R.devices = r.push_devices ?? 0; R.loadedAt = Date.now(); R.missing = false;
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
       if (e instanceof ApiError && e.status === 404) R.missing = true;
@@ -1119,7 +1363,7 @@
       right.append(el("button", { type: "button", class: "rem-check", "aria-label": `Mark ${r.title} as complete`,
                                   title: "Mark as complete", onclick: () => askComplete(r) }));
     }
-    return el("li", { class: `rem-item ${st}`, "data-id": String(r.id) }, main, right);
+    return swipeable(el("li", { class: `rem-item ${st}`, "data-id": String(r.id) }, main, right), { entity: "reminder", id: r.id });
   }
   function renderUpcoming() {
     const box = $("upcoming-list");
@@ -1508,6 +1752,7 @@
       try { P.reg = await navigator.serviceWorker.register("sw.js", { scope: "./" }); } catch { /* unsupported (e.g. private mode) */ }
       try { P.sub = P.reg?.pushManager ? await P.reg.pushManager.getSubscription() : null; } catch { P.sub = null; }
       navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data?.type === "flush-queue") flushQueue();   // sw.js: Background Sync fired (connection is back)
         if (e.data?.type === "open-reminder") {
           if (e.data.id != null) openReminderById(e.data.id); else showTab("reminders");
         }
@@ -1542,7 +1787,8 @@
     if (tab !== "reminders" && tab !== "dash") loadReminders(true);   // tab badge
     initPush();
     if (tab === "add") setTimeout(() => $("amount").focus(), 50);
-    loadRecent(); flushQueue();
+    flushQueue().finally(loadRecent);
+    loadFormAssets();
   }
   window.addEventListener("online", flushQueue);
   // relative times ("Tomorrow", "Overdue") stay current while a reminder list is on screen (display only;

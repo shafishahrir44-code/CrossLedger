@@ -1,5 +1,8 @@
 // Ledger service worker: shows Web Push notifications for reminders and opens the right reminder when
 // one is tapped. No caching and no fetch handler: the app always loads fresh from the network.
+// Offline changes (entries and swipe-deletes) are queued by the app; on browsers with Background Sync
+// (Chrome / Android) the "sync" event below tells an open app to send them as soon as the connection is
+// back. iOS has no Background Sync: there the app sends the queue when it is opened or comes back online.
 "use strict";
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -35,5 +38,13 @@ self.addEventListener("notificationclick", (event) => {
       return;
     }
     await self.clients.openWindow(target);
+  })());
+});
+
+self.addEventListener("sync", (event) => {
+  if (event.tag !== "ledger-queue") return;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const w of wins) w.postMessage({ type: "flush-queue" });
   })());
 });
