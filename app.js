@@ -281,6 +281,13 @@
     const c = findCat(catName);
     if (!catAssetType(c) || S.type !== "expense") return null;
     const src = pmAsset();
+    if (c.asset_link === "group" && c.asset_group) {
+      const g = c.asset_group;
+      const t = S.assets.find((a) => a.asset_id === c.asset_id && a.category === g && a.currency === S.currency)
+        || S.assets.find((a) => a.category === g && a.currency === S.currency && (a.name || "").toLowerCase() === g.toLowerCase());
+      if (t) return t.asset_id === src?.asset_id ? null : t;
+      return { name: g, value: 0, currency: S.currency, isNew: true };
+    }
     if (c.asset_id) {
       const linked = S.assets.find((a) => a.asset_id === c.asset_id && a.currency === S.currency);
       if (linked) return linked.asset_id === src?.asset_id ? null : linked;
@@ -353,9 +360,12 @@
     $("item-asset").hidden = !on;
     $("item-asset-hint").hidden = !on;
     const name = $("item-name").value.trim() || "this category";
-    $("item-asset-hint").textContent = $("item-asset").value === "new"
+    const v = $("item-asset").value;
+    $("item-asset-hint").textContent = v === "new"
       ? `Each expense here is taken from the payment method and added to a new asset called "${name}" (it appears in Assets after the first expense).`
-      : "Each expense here is taken from the payment method and added to this asset.";
+      : v.startsWith("group:")
+        ? `Each expense here is taken from the payment method and added to one running total, "${v.slice(6)}", in your ${v.slice(6)} group. Your other ${v.slice(6)} assets stay as they are.`
+        : "Each expense here is taken from the payment method and added to this bank account.";
   }
   $("item-connect").addEventListener("change", showAssetPick);
   $("item-asset").addEventListener("change", showAssetPick);
@@ -375,15 +385,25 @@
     // "Connect to an asset": New asset (named like the category) or one of your assets in this currency
     const connected = !!catAssetType(existing);
     $("item-connect").checked = connected;
+    // New asset · your asset groups (one running total each, e.g. "Gold") · bank accounts by name
     const mine = S.assets.filter((a) => a.currency === S.currency);
-    const opt = (a) => el("option", { value: String(a.asset_id), text: `${assetName(a)} · ${money(a.value ?? 0, a.currency)}` });
-    const banks = mine.filter((a) => a.account), others = mine.filter((a) => !a.account);
+    const banks = mine.filter((a) => a.account);
+    const groupTotal = (g) => mine.filter((a) => a.category === g && !a.account).reduce((t, a) => t + Number(a.value ?? 0), 0);
+    const groups = [...new Set([...S.assetCats, ...mine.filter((a) => !a.account).map((a) => a.category)])]
+      .filter((g) => mine.some((a) => a.category === g && !a.account) || g === existing?.asset_group);
     $("item-asset").replaceChildren(
       el("option", { value: "new", text: "New asset" }),
-      ...(others.length ? [el("optgroup", { label: "Your assets" }, ...others.map(opt))] : []),
-      ...(banks.length ? [el("optgroup", { label: "Banks" }, ...banks.map(opt))] : []));
-    $("item-asset").value = connected && existing.asset_id && mine.some((a) => a.asset_id === existing.asset_id)
-      ? String(existing.asset_id) : "new";
+      ...(groups.length ? [el("optgroup", { label: "Asset groups" },
+        ...groups.map((g) => el("option", { value: "group:" + g, text: `${g} · ${money(groupTotal(g), S.currency)}` })))] : []),
+      ...(banks.length ? [el("optgroup", { label: "Banks" },
+        ...banks.map((a) => el("option", { value: String(a.asset_id), text: `${assetName(a)} · ${money(a.value ?? 0, a.currency)}` })))] : []));
+    const pick = !connected ? "new"
+      : existing.asset_link === "group" && existing.asset_group ? "group:" + existing.asset_group
+      : existing.asset_link === "asset" && banks.some((a) => a.asset_id === existing.asset_id) ? String(existing.asset_id)
+      : existing.asset_link === "asset" && existing.asset_id
+        ? (() => { const a = mine.find((x) => x.asset_id === existing.asset_id); return a ? "group:" + a.category : "new"; })()
+      : "new";
+    $("item-asset").value = [...$("item-asset").options].some((o) => o.value === pick) ? pick : "new";
     itemCtx.asset0 = connected ? $("item-asset").value : null;
     showAssetPick();
     $("item-budgets").replaceChildren(...S.meta.currencies.filter((c) => c.code === S.currency).map((c) => {
@@ -444,7 +464,8 @@
       // asset link: null = not connected, "new", or an asset id (as a string)
       const link = list === "cat" && kind !== "income" && $("item-connect").checked ? $("item-asset").value : null;
       const acatChanged = list === "cat" && link !== (itemCtx.asset0 ?? null);
-      const linkBody = link === null ? null : link === "new" ? "new" : Number(link);
+      const linkBody = link === null ? null : link === "new" ? "new" : link.startsWith("group:") ? null : Number(link);
+      const linkFields = link === null ? { asset: null } : link.startsWith("group:") ? { asset_group: link.slice(6) } : { asset: linkBody };
       const catChanged = !original || name !== original || (list === "cat" && existing && (existing.kind !== kind || acatChanged));
       if (list === "acat") {
         if (!original) r = await api("POST", "/asset-categories", { name });
@@ -453,10 +474,10 @@
         if (r) await afterAssetCatChange(original, r.asset_category.name, r.message);
         return;
       }
-      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency, ...(link !== null ? { asset: linkBody } : {}) } : { name, currency });
+      if (!original) r = await api("POST", path, list === "cat" ? { name, kind, currency, ...(link !== null ? linkFields : {}) } : { name, currency });
       else if (list === "cat" && catChanged) {
         r = await api("PATCH", path, { name: original, ...(name !== original ? { new_name: name } : {}), kind, currency,
-                                      ...(acatChanged ? { asset: linkBody } : {}) });
+                                      ...(acatChanged ? linkFields : {}) });
       }
       else if (list === "bank" && name !== original) r = await api("PATCH", path, { name: original, new_name: name, currency });
       const saved = r ? (r.category || r.payment_method).name : original;
