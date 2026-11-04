@@ -702,3 +702,10 @@ html.dark .chips button.chip-asset .chip-badge {
   background: #FFD700; color: #000; font: 800 13px/1 -apple-system, system-ui, sans-serif; letter-spacing: 0; text-transform: none;
 }
 html.dark .chips button.chip-asset[aria-checked="true"] .chip-badge { background: #FFD700; color: #000; }
+
+/* asset sparkline colour follows the 3-month trend */
+.spark { --spark: rgba(142, 142, 147, .6); }
+.spark.spark-up { --spark: rgba(52, 199, 89, .6); }
+.spark.spark-down { --spark: rgba(255, 59, 48, .6); }
+.spark .spark-line { stroke: var(--spark); }
+.spark .spark-fill { fill: var(--spark); opacity: .18; }

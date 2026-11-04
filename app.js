@@ -1553,6 +1553,9 @@
     let d = `M0 ${y(pts[0].value).toFixed(2)}`;
     for (let i = 1; i < pts.length; i++) d += ` H${x(pts[i].date).toFixed(2)} V${y(pts[i].value).toFixed(2)}`;
     d += " H100";
+    // trend over the sparkline window: first vs last value (tiny float noise counts as flat)
+    const diff = vs[vs.length - 1] - vs[0], eps = Math.max(1e-9, Math.abs(vs[0]) * 1e-6);
+    svg.classList.add(diff > eps ? "spark-up" : diff < -eps ? "spark-down" : "spark-flat");
     svg.append(svgEl("path", { d: d + " V32 H0 Z", class: "spark-fill" }), svgEl("path", { d, class: "spark-line" }));
     return svg;
   }
