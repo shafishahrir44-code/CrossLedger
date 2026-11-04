@@ -5,7 +5,7 @@
 // The API key is asked once and stored in the iOS Keychain (never in this file).
 
 const API = "https://themifjtlrkwytebkkig.supabase.co/functions/v1/expense-api";
-const WEB = "https://shafishahrir44-code.github.io/ledger/";
+const WEB = "https://shafishahrir44-code.github.io/CrossLedger/";
 const KEY_NAME = "ledger_api_key";
 const SYM = { MYR: "RM ", KRW: "₩" };
 
@@ -24,7 +24,7 @@ async function getKey() {
   if (config.runsInWidget) return null;
   const a = new Alert();
   a.title = "Ledger API key";
-  a.message = "Paste the API key from secrets\\values.txt. It is stored in the iPhone Keychain.";
+  a.message = "Paste your Ledger token (Ledger app: Account → Create token). It is stored in the iPhone Keychain.";
   a.addSecureTextField("API key", "");
   a.addAction("Save");
   a.addCancelAction("Cancel");
