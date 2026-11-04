@@ -324,7 +324,7 @@
       },
       });
       // asset-building categories (Gold, ASB, Savings) get a small gold pill
-      if (type) { chip.classList.add("chip-asset"); chip.title = `Adds to your ${type} asset`; chip.append(el("span", { class: "chip-badge", "aria-hidden": "true", text: "asset" })); }
+      if (type) { chip.classList.add("chip-asset"); chip.title = `Adds to your ${type} asset`; chip.append(el("span", { class: "chip-badge", "aria-hidden": "true", text: "+" })); }
       return chip;
     });
     for (const c of chips) for (const a of ["role", "aria-checked", "aria-label"]) if (c.getAttribute(a) === "null") c.removeAttribute(a);
