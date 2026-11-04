@@ -524,22 +524,22 @@ dialog.sheet { width: min(96vw, 560px); max-height: 92vh; overflow: auto; }
    Cards #1C1C1E on #000, 16px padding, 12px gaps, hairline borders.
    ===================================================================== */
 html:root.dark {
-  --bg: #000000; --surface: #1C1C1E; --surface-2: #2C2C2E; --ink: #FFFFFF; --ink-2: #8E8E93;
-  --line: rgba(255, 255, 255, .08);
-  --exp: #0A84FF; --exp-soft: rgba(10, 132, 255, .18);
-  --inc: #30D158; --inc-soft: rgba(48, 209, 88, .16);
-  --over: #FF453A; --over-soft: rgba(255, 69, 58, .18);
-  --asset: #FFD700; --asset-soft: rgba(255, 215, 0, .14);
-  --focus: #FFD60A;
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #f4f6f8; --ink: #16202a; --ink-2: #536170;
+  --line: #d8dee5;
+  --exp: #2944c9; --exp-soft: #dfe5fb;
+  --inc: #0b7a63; --inc-soft: #d6efe8;
+  --over: #c0263a; --over-soft: #f8dde1;
+  --asset: #a8760a; --asset-soft: #f6ead0;
+  --focus: #f0a400;
   --card-pad: 16px; --gap: 12px;
-  color-scheme: dark;
+  color-scheme: light;
 }
 html.dark input, html.dark select, html.dark textarea { background: var(--surface-2); border-color: var(--line); }
 html.dark .primary { background: var(--exp); color: #fff; }
-html.dark .ghost { border-color: rgba(255, 255, 255, .14); }
+html.dark .ghost { border-color: var(--line); }
 html.dark dialog { background: var(--surface); border: 1px solid var(--line); }
 html.dark dialog::backdrop { background: rgba(0, 0, 0, .6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
-html.dark .toast { background: #F2F2F7; color: #000; }
+html.dark .toast { background: var(--ink); color: var(--bg); }
 html.dark .toast.bad { background: var(--over); color: #fff; }
 
 /* cards */
@@ -551,7 +551,7 @@ html.dark .kpis { gap: var(--gap); margin: var(--gap) 0; }
 
 /* bottom navigation: translucent, blurred, fixed order Add | Dashboard | Reminders | Assets */
 html.dark .tabs {
-  background: rgba(22, 22, 24, .72);
+  background: rgba(255, 255, 255, .72);
   backdrop-filter: saturate(180%) blur(22px); -webkit-backdrop-filter: saturate(180%) blur(22px);
   border-top: 1px solid var(--line); gap: 0; padding-top: 6px;
 }
@@ -608,18 +608,18 @@ html.dark .chips button, html.dark .pills button {
 html.dark .chips button[aria-checked="true"], html.dark .pills button[aria-checked="true"] {
   background: var(--exp); border-color: var(--exp); color: #fff;
 }
-html.dark body.is-income .chips button[aria-checked="true"] { background: var(--inc); border-color: var(--inc); color: #000; }
+html.dark body.is-income .chips button[aria-checked="true"] { background: var(--inc); border-color: var(--inc); color: #fff; }
 html.dark .chip-more { color: var(--ink-2) !important; border-style: dashed !important; }
 html.dark .chip-add { color: var(--ink-2) !important; }
 /* gold asset badge: an inline pill inside the chip, so every chip keeps the same height */
 html.dark .chips button.chip-asset .chip-badge {
   position: static; display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border-radius: 999px;
-  background: var(--asset); color: #000; font: 700 10px/1 -apple-system, system-ui, sans-serif; letter-spacing: .02em;
+  background: var(--asset); color: #fff; font: 700 10px/1 -apple-system, system-ui, sans-serif; letter-spacing: .02em;
   text-transform: uppercase; box-shadow: none; transform: none; min-width: 0; border: 0;
 }
-html.dark .chips button.chip-asset[aria-checked="true"] .chip-badge { background: #fff; color: #000; }
+html.dark .chips button.chip-asset[aria-checked="true"] .chip-badge { background: #fff; color: var(--asset); }
 /* before → after balance under the amount */
-.amount-preview { text-align: center; color: #8E8E93; font-size: 14px; margin: -10px 0 10px; min-height: 0; font-variant-numeric: tabular-nums; }
+.amount-preview { text-align: center; color: var(--ink-2); font-size: 14px; margin: -10px 0 10px; min-height: 0; font-variant-numeric: tabular-nums; }
 .amount-preview[hidden] { display: none; }
 .amount-preview.neg { color: var(--over); }
 
@@ -687,11 +687,11 @@ html.dark .asset-list li.asset-row { background: var(--surface); border-radius: 
 .spark-fill { fill: var(--asset, #FFD700); opacity: .25; }
 .asset-row > .t-main, .asset-row > .amt, .asset-row > .pencil { position: relative; }
 .asset-row { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-.pencil { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .08); color: var(--ink);
+.pencil { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .06); color: var(--ink);
   display: grid; place-items: center; padding: 0; margin-left: 4px; }
 .pencil svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 .asset-row .t3[hidden] { display: none; }
 html.dark .rem-full > li.rem-empty, html.dark .tx-list > li.muted { padding: 14px 16px; background: var(--surface); border-radius: 14px; }
 html.dark .chips button.chip-asset .chip-badge { width: auto; margin-left: 0; vertical-align: 0; }
-html.dark .chips button.chip-asset[aria-checked="true"] .chip-badge { background: var(--asset); color: #000; }
+html.dark .chips button.chip-asset[aria-checked="true"] .chip-badge { background: #fff; color: var(--asset); }
 html.dark .amount { background: transparent; border: 0; padding: 0; min-height: 0; }
