@@ -1,10 +1,12 @@
 "use strict";
 (() => {
   // ---------- storage (localStorage may throw in private mode) ----------
+  // Per account: everything is kept under "ledger.u.<user id>." once signed in (see auth.js).
+  let NS = "ledger.anon.";
   const store = {
-    get(k, d = null) { try { const v = localStorage.getItem("ledger." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-    set(k, v) { try { localStorage.setItem("ledger." + k, JSON.stringify(v)); } catch { /* ignore */ } },
-    del(k) { try { localStorage.removeItem("ledger." + k); } catch { /* ignore */ } },
+    get(k, d = null) { try { const v = localStorage.getItem(NS + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(NS + k, JSON.stringify(v)); } catch { /* ignore */ } },
+    del(k) { try { localStorage.removeItem(NS + k); } catch { /* ignore */ } },
   };
   const $ = (id) => document.getElementById(id);
   const el = (tag, props = {}, ...kids) => {
@@ -21,8 +23,7 @@
 
   // ---------- state ----------
   const S = {
-    api: store.get("api", window.EXPENSE_API_URL || ""),
-    key: store.get("key", ""),
+    api: window.EXPENSE_API_URL || "",
     meta: store.get("meta", null),
     type: "expense",
     currency: store.get("currency", "MYR"),
@@ -81,9 +82,11 @@
   // ---------- API ----------
   class ApiError extends Error { constructor(status, body) { super(body?.error?.message || `HTTP ${status}`); this.status = status; this.body = body; } }
   async function api(method, path, body) {
+    const token = await LedgerAuth.token();
+    if (!token) throw new ApiError(401, { error: { code: "signed_out", message: "Signed out" } });
     const res = await fetch(S.api.replace(/\/+$/, "") + path, {
       method,
-      headers: { "x-api-key": S.key, ...(body ? { "content-type": "application/json" } : {}) },
+      headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
       signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
@@ -138,23 +141,133 @@
     S.meta = m; store.set("meta", m);
     return m;
   }
-  function showSetup(err) {
-    $("setup").hidden = false; $("add").hidden = true; $("dash").hidden = true; $("assets").hidden = true; $("reminders").hidden = true; $("tabs").hidden = true;
-    $("setup-url").value = S.api;
+  // ---------- sign in (email code / link) ----------
+  const SCREENS = ["add", "dash", "assets", "reminders"];
+  function showSetup(err) {   // also used when the server says the session is no longer valid
+    $("setup").hidden = false; for (const t of SCREENS) $(t).hidden = true; $("tabs").hidden = true;
+    $("acct-btn").hidden = true; $("sync-bar").hidden = true;
+    signStep(store.get("pendingEmail", null) ? "code" : "email");
     if (err) { $("setup-error").textContent = err; $("setup-error").hidden = false; }
-  }
-  $("setup-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    S.api = $("setup-url").value.trim(); S.key = $("setup-key").value.trim();
-    $("setup-error").hidden = true;
-    try {
-      await loadMeta();
-      store.set("api", S.api); store.set("key", S.key);
-      start();
-    } catch (err) {
-      $("setup-error").textContent = err.status === 401 ? "That API key was not accepted." : "Couldn't reach the API: " + err.message;
+    if (!LedgerAuth.configured) {
+      $("setup-error").textContent = "Sign-in isn't set up on this copy of Ledger yet: run scripts\\deploy.ps1 to write web/config.js.";
       $("setup-error").hidden = false;
     }
+  }
+  function signStep(step) {
+    $("signin-email-step").hidden = step !== "email";
+    $("signin-code-step").hidden = step !== "code";
+    $("setup-error").hidden = true;
+    const pending = store.get("pendingEmail", "");
+    if (step === "code") { $("signin-sent-to").textContent = pending; setTimeout(() => $("signin-code").focus(), 50); }
+    else { $("signin-email").value = pending || ""; }
+  }
+  const signErr = (m) => { $("setup-error").textContent = m; $("setup-error").hidden = false; };
+  $("signin-email-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $("signin-send"); btn.disabled = true;
+    try {
+      const email = await LedgerAuth.sendCode($("signin-email").value);
+      store.set("pendingEmail", email);
+      signStep("code");
+    } catch (err) { signErr(err.message); } finally { btn.disabled = false; }
+  });
+  $("signin-code-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $("signin-verify"); btn.disabled = true;
+    try {
+      await LedgerAuth.verifyCode(store.get("pendingEmail", ""), $("signin-code").value);
+      store.del("pendingEmail");
+      $("signin-code").value = "";
+      start();
+    } catch (err) { signErr(err.message); } finally { btn.disabled = false; }
+  });
+  $("signin-back").addEventListener("click", () => { store.del("pendingEmail"); signStep("email"); });
+  $("signin-resend").addEventListener("click", async () => {
+    try { await LedgerAuth.sendCode(store.get("pendingEmail", "")); toast("New code sent."); } catch (err) { signErr(err.message); }
+  });
+
+  // per-account local state (read after sign-in; nothing from another account is ever read)
+  function loadUserState() {
+    const uid = LedgerAuth.uid();
+    NS = `ledger.u.${uid}.`;
+    // one-time: an offline queue from before sign-in existed (single-user version on this device) belongs
+    // to whoever signs in first here; the old API key and caches are removed
+    try {
+      const old = localStorage.getItem("ledger.queue");
+      if (old && !localStorage.getItem(NS + "queue")) localStorage.setItem(NS + "queue", old);
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith("ledger.") && !k.startsWith("ledger.u.") && k !== "ledger.auth" && !k.startsWith("ledger.anon.")) localStorage.removeItem(k);
+      }
+    } catch { /* storage unavailable */ }
+    S.meta = store.get("meta", null);
+    S.currency = store.get("currency", "MYR");
+    S.dashCurrency = store.get("dashCurrency", S.currency);
+    S.bankByCur = store.get("bankByCur", {});
+    S.assets = store.get("assets", []);
+    S.assetCats = store.get("assetCats", []);
+    S.category = null;
+    R.filter = store.get("remFilter", "upcoming") === "completed" ? "completed" : "upcoming";
+    R.list = []; R.completed = [];
+    A.open = new Set();   // asset groups start collapsed
+  }
+
+  // ---------- account: who's signed in, tokens for the Shortcut / widget, sign out ----------
+  async function openAccount() {
+    $("acct-email").textContent = LedgerAuth.email() || "Signed in";
+    $("acct-new-token").hidden = true; $("acct-err").hidden = true;
+    $("acct-dlg").showModal();
+    loadTokens();
+  }
+  async function loadTokens() {
+    const box = $("acct-tokens");
+    box.replaceChildren(el("li", { class: "muted small", text: "Loading…" }));
+    try {
+      const r = await api("GET", "/tokens");
+      box.replaceChildren(...r.tokens.map((t) => el("li", { class: "token-row" },
+        el("span", { class: "t-main" }, el("span", { class: "t1", text: t.name }),
+          el("span", { class: "t2", text: `${t.prefix}… · ${t.last_used_at ? "used " + new Date(t.last_used_at).toLocaleDateString() : "never used"}` })),
+        el("button", { type: "button", class: "link danger-link", text: "Revoke", "aria-label": `Revoke ${t.name}`,
+          onclick: async () => {
+            try { await api("DELETE", `/tokens/${t.id}`); toast(`Revoked ${t.name}.`); loadTokens(); }
+            catch (e) { $("acct-err").textContent = errText(e); $("acct-err").hidden = false; }
+          } }))));
+      if (!r.tokens.length) box.append(el("li", { class: "muted small", text: "No tokens. Create one for the iOS Shortcut or the widget." }));
+    } catch (e) { box.replaceChildren(el("li", { class: "muted small", text: "Couldn't load tokens: " + errText(e) })); }
+  }
+  $("acct-btn").addEventListener("click", openAccount);
+  $("acct-token-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (e.submitter?.value === "close") { $("acct-dlg").close(); return; }
+    $("acct-err").hidden = true;
+    try {
+      const r = await api("POST", "/tokens", { name: $("acct-token-name").value.trim() || "iPhone" });
+      $("acct-token-value").value = r.token;
+      $("acct-new-token").hidden = false;
+      $("acct-token-name").value = "";
+      loadTokens();
+    } catch (err) { $("acct-err").textContent = errText(err); $("acct-err").hidden = false; }
+  });
+  $("acct-token-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("acct-token-value").value); toast("Token copied."); }
+    catch { $("acct-token-value").select(); }
+  });
+  $("acct-close").addEventListener("click", () => $("acct-dlg").close());
+  $("acct-signout").addEventListener("click", async () => {
+    const n = queue().length;
+    if (n && !confirm(`${n} change${n === 1 ? " hasn't" : "s haven't"} been sent yet and will be lost if you sign out. Sign out anyway?`)) return;
+    $("acct-signout").disabled = true;
+    await LedgerAuth.signOut({
+      beforeClear: async () => {
+        // this device stops getting this account's reminders
+        if (P.sub) {
+          try { await api("DELETE", "/push/subscriptions", { endpoint: P.sub.endpoint }); } catch { /* offline */ }
+          try { await P.sub.unsubscribe(); } catch { /* */ }
+          P.sub = null;
+        }
+        try { navigator.clearAppBadge?.(); } catch { /* */ }
+      },
+    });
+    location.replace(location.pathname);   // fresh page: no state of the old account in memory
   });
 
   // ---------- entry form ----------
@@ -180,8 +293,26 @@
   }
   // Chips for a user-managed list, ending with a "+" chip. In edit mode a tap opens the editor.
   const ASSET_TYPE_LABEL = { investment: "investment", commodity: "commodity", savings: "savings" };
-  function renderPickList(container, names, current, { editing, onPick, onEdit, onAdd, addLabel, badge = () => null }) {
-    const chips = names.map((v) => {
+  // usage counts per list ("cat.MYR.expense" / "bank.MYR"), bumped on every save, decide which chips show first
+  const CHIP_LIMIT = 6;
+  const useKey = (list) => `use.${list}`;
+  function bumpUse(list, name) {
+    if (!name) return;
+    const u = store.get(useKey(list), {}); u[name] = (u[name] || 0) + 1; store.set(useKey(list), u);
+  }
+  const openLists = new Set();   // lists expanded with "More" (until the app is reopened)
+  function renderPickList(container, names, current, { editing, onPick, onEdit, onAdd, addLabel, badge = () => null, list = container.id }) {
+    // low-frequency items collapse behind a trailing "More" chip; the selected one always shows
+    let shown = names, hiddenN = 0;
+    if (!editing && !openLists.has(list) && names.length > CHIP_LIMIT + 1) {
+      const u = store.get(useKey(list), {});
+      const ranked = [...names].sort((a, b) => (u[b] || 0) - (u[a] || 0) || names.indexOf(a) - names.indexOf(b));
+      const keep = new Set(ranked.slice(0, CHIP_LIMIT));
+      if (current) keep.add(current);
+      shown = names.filter((n) => keep.has(n));   // keep your own order among the visible ones
+      hiddenN = names.length - shown.length;
+    }
+    const chips = shown.map((v) => {
       const type = badge(v);
       const chip = el("button", {
       type: "button", role: editing ? null : "radio", "aria-checked": editing ? null : String(v === current), "data-v": v, text: v,
@@ -192,12 +323,17 @@
         for (const b of container.children) if (!b.classList.contains("chip-add")) b.setAttribute("aria-checked", String(b.dataset.v === v));
       },
       });
-      // asset-building categories (Gold, ASB, Savings) get a small "+" badge
-      if (type) { chip.classList.add("chip-asset"); chip.title = `Adds to your ${type} asset`; chip.append(el("span", { class: "chip-badge", "aria-hidden": "true", text: "+" })); }
+      // asset-building categories (Gold, ASB, Savings) get a small gold pill
+      if (type) { chip.classList.add("chip-asset"); chip.title = `Adds to your ${type} asset`; chip.append(el("span", { class: "chip-badge", "aria-hidden": "true", text: "asset" })); }
       return chip;
     });
     for (const c of chips) for (const a of ["role", "aria-checked", "aria-label"]) if (c.getAttribute(a) === "null") c.removeAttribute(a);
-    chips.push(el("button", { type: "button", class: "chip-add", "aria-label": addLabel, text: "+", onclick: onAdd }));
+    if (hiddenN) {
+      chips.push(el("button", { type: "button", class: "chip-more", "aria-label": `Show ${hiddenN} more`, text: `More · ${hiddenN}`,
+        onclick: () => { openLists.add(list); renderType(); renderBanks(); } }));
+    } else {
+      chips.push(el("button", { type: "button", class: "chip-add", "aria-label": addLabel, text: "+", onclick: onAdd }));
+    }
     container.replaceChildren(...chips);
   }
   // Categories / payment methods of the active currency only (RM and ₩ lists are separate).
@@ -229,6 +365,7 @@
       onAdd: () => openItem("cat", null),
       addLabel: "Add category",
       badge: (c) => { const k = findCat(c); return catAssetType(k) ? (k.asset_name || k.name) : null; },
+      list: catKey(),
     });
     const hint = $("cat-hint");
     hint.hidden = cats.length > 0 && !S.editCats;
@@ -248,6 +385,7 @@
       onEdit: (b) => openItem("bank", b),
       onAdd: () => openItem("bank", null),
       addLabel: "Add payment method",
+      list: `bank.${S.currency}`,
     });
     const hint = $("bank-hint");
     hint.hidden = banks.length > 0 && !S.editBanks;
@@ -564,7 +702,7 @@
   let flushing = false;
   async function flushQueue({ manual = false } = {}) {
     const q = queue();
-    if (!q.length || !S.key || flushing) { renderSync(); return; }
+    if (!q.length || !LedgerAuth.uid() || flushing) { renderSync(); return; }
     flushing = true; renderSync();
     const left = [];
     let sentTx = 0, sentDel = 0;
@@ -652,6 +790,7 @@
     try {
       const r = await api("POST", "/transactions", body);
       S.lastSavedId = r.transaction.transaction_id;
+      bumpUse(catKey(), body.category); bumpUse(`bank.${S.currency}`, body.which_bank);
       // new balances straight from the response, so the pickers are right before the refresh lands
       for (const a of r.assets || []) {
         const local = S.assets.find((x) => x.asset_id === a.asset_id);
@@ -663,7 +802,7 @@
       loadRecent();
       if (r.assets?.length) { renderLinks(); loadFormAssets(); if (!$("assets").hidden) loadAssets(true); }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) { showSetup("Your API key was rejected. Enter it again."); }
+      if (err instanceof ApiError && err.status === 401) { showSetup("You were signed out. Sign in again."); }
       else if (err instanceof ApiError && err.status < 500) {
         const f = err.body?.error?.fields;
         toast(f ? Object.entries(f).map(([k, v]) => `${k} ${v}`).join(", ") : err.message, { bad: true, ms: 7000 });
@@ -1198,7 +1337,7 @@
       if (Date.now() - R.loadedAt > 30000) loadReminders(true); else renderUpcoming();
       $("updated").textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + ", refreshes every 15 s";
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
+      if (e instanceof ApiError && e.status === 401) return showSetup("You were signed out. Sign in again.");
       if (!silent) toast("Couldn't load the dashboard: " + e.message, { bad: true });
     }
   }
@@ -1213,6 +1352,8 @@
     $("k-rem-label").textContent = k.over_budget ? "Over budget by" : "Remaining";
     $("k-rem").textContent = hasBudget ? f(Math.abs(Number(k.remaining_budget))) : "—";
     $("k-used").textContent = hasBudget ? `${Number(k.budget_used_pct).toFixed(1)}% of budget used` : "Set a budget to track it";
+    $("k-pct").textContent = hasBudget ? `${Number(k.budget_used_pct).toFixed(1)}%` : "—";
+    $("k-pct").className = "num kpi-v" + (k.over_budget ? " over-v" : "");
     document.body.classList.toggle("over", !!k.over_budget);
     const pct = hasBudget ? Math.min(100, Number(k.budget_used_pct)) : 0;
     $("meter-fill").style.width = pct + "%";
@@ -1258,8 +1399,10 @@
   function renderTable(cur) {
     fillSelect($("f-cat"), [...new Set(S.monthTx.map((t) => t.category))].sort());
     fillSelect($("f-bank"), [...new Set(S.monthTx.map((t) => t.which_bank))].sort());
-    const ft = $("f-type").value, fc = $("f-cat").value, fb = $("f-bank").value;
-    const rows = S.monthTx.filter((t) => (!ft || t.transaction_type === ft) && (!fc || t.category === fc) && (!fb || t.which_bank === fb));
+    const ft = S.txFilter || "", fc = $("f-cat").value, fb = $("f-bank").value;
+    // "Assets" = entries that bought an asset (Gold, ASB...)
+    const typeOk = (t) => !ft || (ft === "Assets" ? !!t.target_asset : t.transaction_type === ft);
+    const rows = S.monthTx.filter((t) => typeOk(t) && (!fc || t.category === fc) && (!fb || t.which_bank === fb));
     $("tx-body").replaceChildren(...rows.map((t) => {
       const inc = t.transaction_type === "Income";
       const links = (t.source_asset ? ` · ${t.source_asset}` : "") + (t.target_asset ? ` → ${t.target_asset}` : "");
@@ -1275,7 +1418,12 @@
     }));
     if (!rows.length) $("tx-body").append(el("li", { class: "muted tx-empty", text: "No transactions match." }));
   }
-  ["f-type", "f-cat", "f-bank"].forEach((id) => $(id).addEventListener("change", () => renderTable(S.dashCurrency)));
+  ["f-cat", "f-bank"].forEach((id) => $(id).addEventListener("change", () => renderTable(S.dashCurrency)));
+  for (const b of $("f-type").children) b.addEventListener("click", () => {
+    S.txFilter = b.dataset.f;
+    for (const x of $("f-type").children) x.setAttribute("aria-checked", String(x === b));
+    renderTable(S.dashCurrency);
+  });
   $("month").addEventListener("change", () => loadDash());
 
   // budget dialog
@@ -1303,7 +1451,7 @@
   // ---------- assets / net worth ----------
   // asset categories are a user-managed list (shared by RM and ₩): + to add, Edit to rename / remove
   const A = { list: [], totals: {}, categories: [], history: [], ctx: null, editCats: false,
-              open: new Set(store.get("assetOpen", [])) };   // expanded category groups ("MYR|Gold")
+              open: new Set() };   // expanded category groups ("MYR|Gold"); all start collapsed
   const assetCatNames = () => A.categories.map((c) => (typeof c === "string" ? c : c.name));
   const curOrder = () => S.meta.currencies.map((c) => c.code).sort((a, b) => (a === "MYR" ? -1 : b === "MYR" ? 1 : a.localeCompare(b)));
   async function loadAssets(silent = false) {
@@ -1313,7 +1461,7 @@
       setFormAssets(r.assets, r.categories);
       renderAssets();
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
+      if (e instanceof ApiError && e.status === 401) return showSetup("You were signed out. Sign in again.");
       if (e instanceof ApiError && e.status === 404) {
         $("asset-groups").replaceChildren(el("p", { class: "muted small", text: "Your server needs this update first: run scripts\\deploy.ps1 on your laptop." }));
         return;
@@ -1351,7 +1499,6 @@
             onclick: () => {
               const now = !A.open.has(key);
               now ? A.open.add(key) : A.open.delete(key);
-              store.set("assetOpen", [...A.open]);
               head.setAttribute("aria-expanded", String(now)); body.hidden = !now;
             } },
             el("span", { class: "chev", "aria-hidden": "true", text: "›" }),
@@ -1369,13 +1516,58 @@
     const short = (d) => (d.slice(0, 4) === todayLocal().slice(0, 4) ? fmtDay(d).replace(/ \d{4}$/, "") : fmtDay(d));
     const pmName = S.meta?.payment_methods?.find((p) => p.asset_id === a.asset_id)?.name;
     const sub = [pmName ? `Payment method: ${pmName}` : null, a.value_date ? "updated " + fmtDay(a.value_date) : null, a.notes].filter(Boolean).join(" · ");
-    return el("li", { class: "asset-row", tabindex: "0", role: "button", "aria-label": `Edit ${a.name || a.category}`,
-                      onclick: () => openAsset(a), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAsset(a); } } },
+    const name = a.name || a.category;
+    // edit the value: pencil, or press and hold the card (no inline text inputs)
+    const pencil = el("button", { type: "button", class: "pencil", "aria-label": `Edit ${name}`, title: "Edit value",
+                                  onclick: (e) => { e.stopPropagation(); openAsset(a); } });
+    pencil.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>';
+    const t3 = hist.length ? el("div", { class: "t3", text: "Before: " + hist.map((h) => `${short(h.date)} ${money(h.value, a.currency)}`).join(" · ") }) : null;
+    if (t3) t3.hidden = true;
+    const li = el("li", { class: "asset-row", tabindex: "0", "aria-label": `${name}, ${money(a.value, a.currency)}. Press and hold, or use the pencil, to edit.`,
+                          onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAsset(a); } },
+                          onclick: () => { if (li._held) { li._held = false; return; } if (t3) t3.hidden = !t3.hidden; } },
+      sparkline(a),
       el("div", { class: "t-main" },
-        el("div", { class: "t1", text: a.name || a.category }),
+        el("div", { class: "t1", text: name }),
         el("div", { class: "t2", text: sub }),
-        ...(hist.length ? [el("div", { class: "t3", text: "Before: " + hist.map((h) => `${short(h.date)} ${money(h.value, a.currency)}`).join(" · ") })] : [])),
-      el("div", { class: "amt num", text: money(a.value, a.currency) }));
+        ...(t3 ? [t3] : [])),
+      el("div", { class: "amt num", text: money(a.value, a.currency) }),
+      pencil);
+    longPress(li, () => openAsset(a));
+    return li;
+  }
+  // 3-month value line drawn faintly behind the card (step line: values change when updated)
+  function sparkline(a) {
+    const t = new Date(todayLocal() + "T00:00:00"), start = new Date(t.getFullYear(), t.getMonth() - 3, t.getDate());
+    const from = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`, to = todayLocal();
+    const hist = A.history.filter((h) => h.asset_id === a.asset_id).sort((x, y) => (x.date < y.date ? -1 : 1));
+    const before = hist.filter((h) => h.date < from).pop();
+    const pts = [...(before ? [{ date: from, value: before.value }] : []), ...hist.filter((h) => h.date >= from && h.date <= to)];
+    if (!pts.length || pts[pts.length - 1].date !== to) pts.push({ date: to, value: a.value ?? pts[pts.length - 1]?.value ?? 0 });
+    const svg = svgEl("svg", { class: "spark", viewBox: "0 0 100 32", preserveAspectRatio: "none", "aria-hidden": "true" });
+    if (pts.length < 2) return svg;
+    const t0 = new Date(pts[0].date).getTime(), t1 = new Date(to).getTime() || t0 + 1;
+    const vs = pts.map((p) => Number(p.value)), lo = Math.min(...vs), hi = Math.max(...vs), span = hi - lo || 1;
+    const x = (d) => ((new Date(d).getTime() - t0) / Math.max(1, t1 - t0)) * 100;
+    const y = (v) => 28 - ((Number(v) - lo) / span) * 24;
+    let d = `M0 ${y(pts[0].value).toFixed(2)}`;
+    for (let i = 1; i < pts.length; i++) d += ` H${x(pts[i].date).toFixed(2)} V${y(pts[i].value).toFixed(2)}`;
+    d += " H100";
+    svg.append(svgEl("path", { d: d + " V32 H0 Z", class: "spark-fill" }), svgEl("path", { d, class: "spark-line" }));
+    return svg;
+  }
+  // press and hold ~0.5 s (touch or mouse); a scroll or drag cancels it
+  function longPress(node, fire) {
+    let timer = null, x0 = 0, y0 = 0;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    node.addEventListener("pointerdown", (e) => {
+      if (e.target.closest(".pencil")) return;
+      x0 = e.clientX; y0 = e.clientY;
+      timer = setTimeout(() => { timer = null; node._held = true; buzz(10); fire(); }, 500);
+    }, { passive: true });
+    node.addEventListener("pointermove", (e) => { if (timer && Math.hypot(e.clientX - x0, e.clientY - y0) > 8) cancel(); }, { passive: true });
+    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) node.addEventListener(ev, cancel, { passive: true });
+    node.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
   // ---- 3-month trend: one line chart per currency, side by side ----
@@ -1649,7 +1841,7 @@
       R.list = r.reminders.filter((x) => !gone.has(String(x.id))); R.completed = r.completed.filter((x) => !gone.has(String(x.id)));
       R.devices = r.push_devices ?? 0; R.loadedAt = Date.now(); R.missing = false;
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
+      if (e instanceof ApiError && e.status === 401) return showSetup("You were signed out. Sign in again.");
       if (e instanceof ApiError && e.status === 404) R.missing = true;
       else if (!silent) toast("Couldn't load reminders: " + e.message, { bad: true });
     }
@@ -1734,21 +1926,54 @@
     if (!open.length) box.append(el("li", { class: "rem-empty muted small", text: "Nothing coming up. Tap + Reminder to add a bill or payment." }));
     $("rem-view-all").textContent = open.length > 3 ? `View all (${open.length})` : "View all";
   }
+  // Reminders tab: one compact line per reminder — [icon] Name – Amount (Due) → Complete & Log.
+  // Tap the line to see its repeat schedule and connected accounts.
+  const remOpen = new Set();
+  const shortDue = (r) => {
+    const d = new Date(r.isCompleted ? (r.completedAt || r.dueAt) : r.dueAt);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+  function remCompact(r) {
+    const st = remStatus(r), amt = remAmount(r), open = remOpen.has(r.id);
+    const icon = el("span", { class: `rem-ico ${st}`, "aria-hidden": "true", text: st === "completed" ? "✓" : st === "overdue" ? "!" : r.repeat !== "Once" ? "↻" : "•" });
+    const line = el("button", { type: "button", class: "rem-line", "aria-expanded": String(open),
+                                "aria-label": `${r.title}${amt ? ", " + amt : ""}, ${schedText(r)}. Show details` },
+      icon,
+      el("span", { class: "rem-line-t" }, el("span", { class: "rem-name", text: r.title }),
+        amt ? el("span", { class: "rem-sep", text: " – " }) : "", amt ? el("span", { class: "rem-amt num", text: amt }) : ""),
+      el("span", { class: "rem-due" + (st === "overdue" ? " over" : ""), text: `(${shortDue(r)})` }));
+    const act = st === "completed"
+      ? el("button", { type: "button", class: "rem-go ghost", text: "Reopen", onclick: () => reopenReminder(r) })
+      : el("button", { type: "button", class: "rem-go primary", text: "Complete & Log", "aria-label": `Complete and log ${r.title}`, onclick: () => askComplete(r) });
+    const details = el("div", { class: "rem-details" },
+      el("dl", {},
+        el("dt", { text: "When" }), el("dd", { text: schedText(r) }),
+        el("dt", { text: "Repeats" }), el("dd", { text: r.repeat === "Once" ? "Doesn't repeat" : `${r.repeat}${r.remindBefore && r.remindBefore !== "At scheduled time" ? " · alert " + r.remindBefore : ""}` }),
+        el("dt", { text: "Category" }), el("dd", { text: r.category || "None" }),
+        el("dt", { text: "Paid from" }), el("dd", { text: r.paymentMethod || "Not set" }),
+        ...(r.notes ? [el("dt", { text: "Notes" }), el("dd", { text: r.notes })] : []),
+        ...(r.transactionId ? [el("dt", { text: "Logged" }), el("dd", { text: "✓ Expense created" })] : [])),
+      el("button", { type: "button", class: "link", text: "Edit reminder", onclick: () => openReminder(r) }));
+    details.hidden = !open;
+    line.addEventListener("click", () => {
+      const now = !remOpen.has(r.id);
+      now ? remOpen.add(r.id) : remOpen.delete(r.id);
+      line.setAttribute("aria-expanded", String(now)); details.hidden = !now;
+    });
+    return swipeable(el("li", { class: `rem-item rem-compact ${st}`, "data-id": String(r.id) },
+      el("div", { class: "rem-row" }, line, act), details), { entity: "reminder", id: r.id });
+  }
   function renderReminderList() {
-    const now = Date.now();
-    const over = R.list.filter((r) => remStatus(r, now) === "overdue");
-    const up = R.list.filter((r) => remStatus(r, now) === "upcoming");
-    $("rem-n-upcoming").textContent = up.length ? String(up.length) : "";
-    $("rem-n-overdue").textContent = over.length ? String(over.length) : "";
+    const open = openSorted();   // overdue first, then soonest
+    $("rem-n-upcoming").textContent = open.length ? String(open.length) : "";
     for (const b of $("rem-tabs").children) b.setAttribute("aria-selected", String(b.dataset.f === R.filter));
-    const rows = R.filter === "completed" ? R.completed
-      : (R.filter === "overdue" ? over : up).sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt));
+    const rows = R.filter === "completed" ? R.completed : open;
     const box = $("rem-list");
-    box.replaceChildren(...rows.map(remItem));
+    box.replaceChildren(...rows.map(remCompact));
     if (R.missing) box.replaceChildren(el("li", { class: "rem-empty muted small", text: "Your server needs this update first: run scripts\\deploy.ps1 on your laptop." }));
     else if (!rows.length) {
       box.append(el("li", { class: "rem-empty muted small", text: R.filter === "upcoming" ? "No upcoming reminders. Tap + Reminder to add one."
-        : R.filter === "overdue" ? "Nothing overdue." : "Completed reminders appear here." }));
+        : "Completed reminders appear here." }));
     }
   }
   function renderBadge() {
@@ -2131,11 +2356,18 @@
   }
 
   // ---------- boot ----------
+  let started = false;
   async function start() {
-    $("setup").hidden = true; $("tabs").hidden = false;
+    if (started) return;
+    if (!LedgerAuth.uid()) return showSetup();
+    started = true;
+    loadUserState();
+    $("setup").hidden = true; $("tabs").hidden = false; $("acct-btn").hidden = false;
     try { await loadMeta(); } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return showSetup("Your API key was rejected. Enter it again.");
-      if (!S.meta) return showSetup("Couldn't reach the API. Check the address and your connection.");
+      started = false;
+      if (e instanceof ApiError && e.status === 401) return showSetup("You were signed out. Sign in again.");
+      if (!S.meta) return showSetup("Couldn't reach Ledger. Check your connection and try again.");
+      started = true;
     }
     $("date").value = todayLocal();
     $("month").value = todayLocal().slice(0, 7);
@@ -2167,5 +2399,10 @@
     else renderReminderViews();
     renderNotif();
   });
-  if (!S.key || !S.api) showSetup(); else start();
+  // ---------- boot: signed in on this device? ----------
+  LedgerAuth.onChange((event) => {
+    if (event === "SIGNED_OUT") { started = false; showSetup("You were signed out. Sign in again."); }
+    if (event === "SIGNED_IN" && !started) { store.del("pendingEmail"); start(); }   // e.g. opened from the email link
+  });
+  LedgerAuth.init().then((s) => (s ? start() : showSetup())).catch(() => showSetup());
 })();

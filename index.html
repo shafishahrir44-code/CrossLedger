@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,10 +8,9 @@
 <meta name="referrer" content="no-referrer">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ledger">
-<meta name="theme-color" content="#eef1f4" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#11161c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -21,19 +20,37 @@
 <body>
 <div id="app">
 
-  <!-- One-time setup on each device -->
-  <section id="setup" class="screen" hidden>
-    <h1 class="setup-title">Connect this phone</h1>
-    <p class="muted">Paste the API key once. It stays on this device only and is never in the page source.</p>
-    <form id="setup-form" class="stack" autocomplete="off">
-      <label class="field"><span>API address</span>
-        <input id="setup-url" type="url" required inputmode="url" spellcheck="false"></label>
-      <label class="field"><span>API key</span>
-        <input id="setup-key" type="password" required spellcheck="false" autocomplete="off"></label>
-      <button class="primary" type="submit">Connect</button>
-      <p id="setup-error" class="error" role="alert" hidden></p>
-    </form>
+  <!-- Sign in: one email with a link and a 6-digit code (the code is what works in the Home Screen app) -->
+  <section id="setup" class="screen signin" hidden>
+    <div class="signin-mark" aria-hidden="true">L</div>
+    <h1 class="setup-title">Ledger</h1>
+    <div id="signin-email-step">
+      <p class="muted">Sign in or create your account with your email. No password: we'll email you a code.</p>
+      <form id="signin-email-form" class="stack" novalidate>
+        <label class="field"><span>Email</span>
+          <input id="signin-email" type="email" required inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" enterkeyhint="send"></label>
+        <button class="primary" type="submit" id="signin-send">Email me a code</button>
+      </form>
+    </div>
+    <div id="signin-code-step" hidden>
+      <p class="muted">We sent a code to <strong id="signin-sent-to"></strong>. Enter it here, or tap the link in the email.</p>
+      <form id="signin-code-form" class="stack" novalidate>
+        <label class="field"><span>Code</span>
+          <input id="signin-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" pattern="[0-9]*" class="code-input" enterkeyhint="go"></label>
+        <button class="primary" type="submit" id="signin-verify">Sign in</button>
+        <div class="row">
+          <button type="button" class="ghost" id="signin-back">Use another email</button>
+          <button type="button" class="ghost" id="signin-resend">Send a new code</button>
+        </div>
+      </form>
+    </div>
+    <p id="setup-error" class="error" role="alert" hidden></p>
   </section>
+
+  <!-- account (always reachable while signed in) -->
+  <button type="button" class="acct-btn" id="acct-btn" aria-label="Account and sign out" title="Account" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.8 19.6c1.3-3.3 4-5 7.2-5s5.9 1.7 7.2 5"/></svg>
+  </button>
 
   <!-- offline changes waiting to be sent (all tabs) -->
   <div id="sync-bar" class="sync-bar" role="status" hidden>
@@ -62,6 +79,8 @@
         <span id="amount-sym" class="amount-sym">RM</span>
         <input id="amount" class="amount" inputmode="decimal" placeholder="0" aria-label="Amount" enterkeyhint="next" autocomplete="off">
       </label>
+      <!-- before → after balance of the account it's paid from (and the asset it buys) -->
+      <p id="pm-bal" class="amount-preview" aria-live="polite" hidden></p>
       <p id="amount-err" class="error center" hidden></p>
 
       <div class="field">
@@ -79,8 +98,6 @@
           <button type="button" class="link edit-link" id="bank-edit" aria-pressed="false">Edit</button></div>
         <div class="pills" id="bank-pills" role="radiogroup" aria-labelledby="bank-label"></div>
         <p id="bank-hint" class="muted small list-hint" hidden></p>
-        <!-- each payment method is an account asset: its balance, and where an asset purchase goes -->
-        <p id="pm-bal" class="muted small pm-bal" aria-live="polite" hidden></p>
       </div>
       <p id="form-err" class="error" role="alert" hidden></p>
 
@@ -133,6 +150,7 @@
     <div class="kpis">
       <div class="kpi"><div class="muted small">Income</div><div id="k-inc" class="num kpi-v inc">—</div></div>
       <div class="kpi"><div class="muted small">Net</div><div id="k-net" class="num kpi-v">—</div></div>
+      <div class="kpi"><div class="muted small">Budget used</div><div id="k-pct" class="num kpi-v">—</div></div>
     </div>
 
     <section class="panel">
@@ -162,9 +180,14 @@
         <button type="button" class="link" id="search-open">Search all</button>
       </div>
       <div class="filters">
-        <select id="f-type" aria-label="Type"><option value="">All types</option><option>Expense</option><option>Income</option></select>
         <select id="f-cat" aria-label="Category"><option value="">All categories</option></select>
         <select id="f-bank" aria-label="Payment method"><option value="">All payment methods</option></select>
+      </div>
+      <div class="pillbar" id="f-type" role="radiogroup" aria-label="Show">
+        <button type="button" role="radio" data-f="" aria-checked="true">All</button>
+        <button type="button" role="radio" data-f="Expense" aria-checked="false">Expenses</button>
+        <button type="button" role="radio" data-f="Income" aria-checked="false">Income</button>
+        <button type="button" role="radio" data-f="Assets" aria-checked="false">Assets</button>
       </div>
       <div class="tx-grid-head" aria-hidden="true"><span>Date</span><span>Description</span><span>Category</span><span class="r">Amount</span><span>Payment method</span><span>Type</span></div>
       <ul id="tx-body" class="tx-grid" aria-label="Transactions"></ul>
@@ -206,17 +229,16 @@
     </div>
     <div class="seg seg-wide rem-tabs" role="tablist" aria-label="Show" id="rem-tabs">
       <button type="button" role="tab" data-f="upcoming" aria-selected="true">Upcoming <span class="count" id="rem-n-upcoming"></span></button>
-      <button type="button" role="tab" data-f="overdue" aria-selected="false">Overdue <span class="count" id="rem-n-overdue"></span></button>
       <button type="button" role="tab" data-f="completed" aria-selected="false">Completed</button>
     </div>
     <ul class="rem-list rem-full" id="rem-list" role="tabpanel"></ul>
   </section>
 
   <nav class="tabs" id="tabs" hidden>
-    <button type="button" data-tab="add" aria-current="page">Add</button>
-    <button type="button" data-tab="dash">Dashboard</button>
-    <button type="button" data-tab="assets">Assets</button>
-    <button type="button" data-tab="reminders">Reminders<span class="tab-badge" id="tab-badge" hidden></span></button>
+    <button type="button" data-tab="add" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></svg>Add</button>
+    <button type="button" data-tab="dash"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M7 16V11M12 16V6M17 16v-3"/></svg>Dashboard</button>
+    <button type="button" data-tab="reminders"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5h4"/></svg>Reminders<span class="tab-badge" id="tab-badge" hidden></span></button>
+    <button type="button" data-tab="assets"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10l8-5 8 5M6 10v8M10 10v8M14 10v8M18 10v8M4 19h16"/></svg>Assets</button>
   </nav>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden>
@@ -430,6 +452,32 @@
     </form>
   </dialog>
 
+  <dialog id="acct-dlg" aria-labelledby="acct-title">
+    <form method="dialog" id="acct-token-form" class="stack" novalidate>
+      <div class="panel-head">
+        <h2 id="acct-title">Account</h2>
+        <button type="button" class="link" id="acct-close">Close</button>
+      </div>
+      <p class="acct-who"><span class="muted small">Signed in as</span><br><strong id="acct-email"></strong></p>
+      <h3 class="small-h">Tokens for the iOS Shortcut &amp; widget</h3>
+      <p class="muted small">A token lets the Shortcut or the Scriptable widget add entries to this account. Revoke it if a device is lost.</p>
+      <ul class="token-list" id="acct-tokens"></ul>
+      <div class="token-new">
+        <label class="field grow"><span class="sr-only">Token name</span>
+          <input id="acct-token-name" maxlength="40" placeholder="Name, e.g. iPhone Shortcut" autocomplete="off"></label>
+        <button type="submit" class="ghost" value="create">Create</button>
+      </div>
+      <div class="token-made" id="acct-new-token" hidden>
+        <p class="small"><strong>Copy it now</strong> — it won't be shown again.</p>
+        <div class="token-new"><input id="acct-token-value" readonly class="mono" aria-label="New token">
+          <button type="button" class="ghost" id="acct-token-copy">Copy</button></div>
+      </div>
+      <p id="acct-err" class="error" role="alert" hidden></p>
+      <button type="button" class="danger" id="acct-signout">Sign out</button>
+      <p class="muted small">Signing out removes Ledger's data from this device (cached lists, unsent changes) and stops this device's notifications.</p>
+    </form>
+  </dialog>
+
   <dialog id="budget-dlg">
     <form method="dialog" id="budget-form" class="stack">
       <h2 id="budget-title">Monthly budget</h2>
@@ -444,6 +492,8 @@
   </dialog>
 </div>
 <script src="config.js"></script>
+<script src="vendor/supabase.js"></script>
+<script src="auth.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

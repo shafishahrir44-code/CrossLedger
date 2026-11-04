@@ -518,3 +518,180 @@ dialog.sheet { width: min(96vw, 560px); max-height: 92vh; overflow: auto; }
   outline: 3px solid var(--exp); outline-offset: 2px;
 }
 .tx-list li.swipe:focus-visible { outline: 2px solid var(--exp); outline-offset: -2px; }
+
+/* =====================================================================
+   v7 design: dark, card-based (iOS-style). Overrides the tokens above.
+   Cards #1C1C1E on #000, 16px padding, 12px gaps, hairline borders.
+   ===================================================================== */
+html:root.dark {
+  --bg: #000000; --surface: #1C1C1E; --surface-2: #2C2C2E; --ink: #FFFFFF; --ink-2: #8E8E93;
+  --line: rgba(255, 255, 255, .08);
+  --exp: #0A84FF; --exp-soft: rgba(10, 132, 255, .18);
+  --inc: #30D158; --inc-soft: rgba(48, 209, 88, .16);
+  --over: #FF453A; --over-soft: rgba(255, 69, 58, .18);
+  --asset: #FFD700; --asset-soft: rgba(255, 215, 0, .14);
+  --focus: #FFD60A;
+  --card-pad: 16px; --gap: 12px;
+  color-scheme: dark;
+}
+html.dark input, html.dark select, html.dark textarea { background: var(--surface-2); border-color: var(--line); }
+html.dark .primary { background: var(--exp); color: #fff; }
+html.dark .ghost { border-color: rgba(255, 255, 255, .14); }
+html.dark dialog { background: var(--surface); border: 1px solid var(--line); }
+html.dark dialog::backdrop { background: rgba(0, 0, 0, .6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+html.dark .toast { background: #F2F2F7; color: #000; }
+html.dark .toast.bad { background: var(--over); color: #fff; }
+
+/* cards */
+html.dark .panel, html.dark .kpi, html.dark .meter-card, html.dark .networth .kpi, html.dark .notif-card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: var(--card-pad);
+}
+html.dark .panel { margin-top: var(--gap); }
+html.dark .kpis { gap: var(--gap); margin: var(--gap) 0; }
+
+/* bottom navigation: translucent, blurred, fixed order Add | Dashboard | Reminders | Assets */
+html.dark .tabs {
+  background: rgba(22, 22, 24, .72);
+  backdrop-filter: saturate(180%) blur(22px); -webkit-backdrop-filter: saturate(180%) blur(22px);
+  border-top: 1px solid var(--line); gap: 0; padding-top: 6px;
+}
+html.dark .tabs button {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 6px 4px; font-size: 11px; font-weight: 600; color: var(--ink-2); background: transparent;
+}
+html.dark .tabs button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+html.dark .tabs button[aria-current="page"] { background: transparent; color: var(--exp); }
+html.dark .tab-badge { top: 2px; right: calc(50% - 22px); }
+
+/* account button, top right on every screen */
+.acct-btn {
+  position: fixed; z-index: 6; top: calc(var(--sat) + 10px); right: max(12px, calc(50% - 348px));
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line);
+  background: rgba(28, 28, 30, .8); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  display: grid; place-items: center; color: var(--ink); padding: 0;
+}
+.acct-btn[hidden] { display: none; }
+.acct-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+#app > .screen > .topbar { padding-right: 46px; }
+.acct-who { margin: 0; }
+.small-h { font-size: 14px; margin: 6px 0 0; }
+.token-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.token-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; }
+.token-row .t-main { display: grid; min-width: 0; }
+.token-row .t2 { font-size: 12px; color: var(--ink-2); }
+.token-new { display: flex; gap: 8px; align-items: end; }
+.token-new .field { margin: 0; }
+.token-new .ghost { width: auto; min-height: 44px; padding: 0 16px; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+.danger-link { color: var(--over); }
+
+/* sign-in */
+.signin { max-width: 420px; margin: 0 auto; padding-top: 8vh; }
+.signin-mark { width: 56px; height: 56px; border-radius: 16px; background: var(--exp); color: #fff; display: grid; place-items: center;
+  font: 800 28px/1 ui-rounded, -apple-system, system-ui; }
+.signin .setup-title { margin: 18px 0 6px; }
+.code-input { font: 700 28px/1 ui-rounded, -apple-system, system-ui; letter-spacing: .3em; text-align: center; }
+
+/* ---------- Add ---------- */
+/* chips scroll sideways in one row; rare ones wait behind "More" */
+html.dark .chips, html.dark .pills {
+  flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; gap: 8px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; padding: 2px 16px 4px; margin: 0 -16px;
+  scroll-padding: 0 16px; overscroll-behavior-x: contain;
+}
+html.dark .chips::-webkit-scrollbar, html.dark .pills::-webkit-scrollbar { display: none; }
+html.dark .chips button, html.dark .pills button {
+  flex: none; height: 36px; min-height: 36px; padding: 0 14px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink); font-size: 14px;
+}
+html.dark .chips button[aria-checked="true"], html.dark .pills button[aria-checked="true"] {
+  background: var(--exp); border-color: var(--exp); color: #fff;
+}
+html.dark body.is-income .chips button[aria-checked="true"] { background: var(--inc); border-color: var(--inc); color: #000; }
+html.dark .chip-more { color: var(--ink-2) !important; border-style: dashed !important; }
+html.dark .chip-add { color: var(--ink-2) !important; }
+/* gold asset badge: an inline pill inside the chip, so every chip keeps the same height */
+html.dark .chips button.chip-asset .chip-badge {
+  position: static; display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border-radius: 999px;
+  background: var(--asset); color: #000; font: 700 10px/1 -apple-system, system-ui, sans-serif; letter-spacing: .02em;
+  text-transform: uppercase; box-shadow: none; transform: none; min-width: 0; border: 0;
+}
+html.dark .chips button.chip-asset[aria-checked="true"] .chip-badge { background: #fff; color: #000; }
+/* before → after balance under the amount */
+.amount-preview { text-align: center; color: #8E8E93; font-size: 14px; margin: -10px 0 10px; min-height: 0; font-variant-numeric: tabular-nums; }
+.amount-preview[hidden] { display: none; }
+.amount-preview.neg { color: var(--over); }
+
+/* borderless list cards, generous padding, swipe to delete */
+html.dark .tx-list { display: grid; gap: 8px; }
+html.dark .tx-list li { border-bottom: 0; }
+html.dark .tx-list li.swipe { background: var(--surface); border-radius: 14px; overflow: hidden; }
+html.dark .tx-list li.swipe > .swipe-fg { padding: 14px 16px; background: var(--surface); }
+html.dark .tx-list .t1 { font-weight: 600; }
+
+/* ---------- Dashboard ---------- */
+html.dark #k-exp { font-size: clamp(30px, 9vw, 40px); font-weight: 800; letter-spacing: -.02em; }
+html.dark #k-rem { font-size: clamp(22px, 6.5vw, 28px); font-weight: 750; color: var(--inc); }
+html.dark body.over #k-rem { color: var(--over); }
+html.dark .kpi-v { font-size: clamp(17px, 5vw, 21px); font-weight: 700; }
+#k-pct.over-v { color: var(--over); }
+/* donut, its legend underneath */
+html.dark .donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+html.dark .donut-wrap .donut-legend, html.dark .donut-wrap ul, html.dark .donut-wrap .legend { width: 100%; }
+/* compact pill filter pinned right above the list */
+.pillbar {
+  position: sticky; top: calc(var(--sat) + 0px); z-index: 2; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  padding: 8px 0; margin: 4px 0 6px; background: var(--surface);
+}
+.pillbar::-webkit-scrollbar { display: none; }
+.pillbar button {
+  flex: none; border: 1px solid var(--line); background: var(--surface-2, transparent); color: var(--ink-2);
+  border-radius: 999px; height: 30px; padding: 0 12px; font-size: 13px; font-weight: 600;
+}
+.pillbar button[aria-checked="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+html.dark .filters { grid-template-columns: 1fr 1fr; }
+html.dark .tx-grid li { border-bottom-color: var(--line); }
+
+/* ---------- Reminders: one line each, tap to expand ---------- */
+.rem-compact > .swipe-fg { display: block !important; }
+.rem-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+.rem-line { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; background: none; border: 0; padding: 0; text-align: left; color: var(--ink); }
+.rem-line-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.rem-sep { color: var(--ink-2); font-weight: 400; }
+.rem-line .rem-amt { font-weight: 600; }
+.rem-due { color: var(--ink-2); font-size: 13px; white-space: nowrap; }
+.rem-due.over { color: var(--over); }
+.rem-ico { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 800;
+  background: var(--exp-soft); color: var(--exp); }
+.rem-ico.overdue { background: var(--over-soft); color: var(--over); }
+.rem-ico.completed { background: var(--inc-soft); color: var(--inc); }
+.rem-go { flex: none; width: auto !important; min-height: 32px !important; height: 32px; padding: 0 12px !important; border-radius: 999px !important; font-size: 13px; }
+.rem-details { padding: 0 14px 12px 52px; font-size: 14px; }
+.rem-details[hidden] { display: none; }
+.rem-details dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 6px; }
+.rem-details dt { color: var(--ink-2); }
+.rem-details dd { margin: 0; }
+html.dark .rem-full { list-style: none; padding: 0; display: grid; gap: 8px; }
+html.dark .rem-full > li.swipe { background: var(--surface); border-radius: 14px; overflow: hidden; border: 1px solid var(--line); }
+html.dark .rem-full > li.swipe > .swipe-fg { background: var(--surface); }
+
+/* ---------- Assets: collapsed groups with subtotals; faint 3-month line behind each card ---------- */
+html.dark .acc-item { background: var(--surface-2); border-radius: 14px; margin-top: 8px; overflow: hidden; }
+html.dark .acc-head { padding: 14px 16px; }
+.asset-row { position: relative; overflow: hidden; align-items: center; }
+html.dark .asset-list { padding: 0 8px 8px; gap: 6px; }
+html.dark .asset-list li.asset-row { background: var(--surface); border-radius: 12px; padding: 14px 12px 14px 16px; border: 0; }
+.asset-row > .spark { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .22; }
+.spark-line { fill: none; stroke: var(--asset, #FFD700); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.spark-fill { fill: var(--asset, #FFD700); opacity: .25; }
+.asset-row > .t-main, .asset-row > .amt, .asset-row > .pencil { position: relative; }
+.asset-row { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.pencil { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .08); color: var(--ink);
+  display: grid; place-items: center; padding: 0; margin-left: 4px; }
+.pencil svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.asset-row .t3[hidden] { display: none; }
+html.dark .rem-full > li.rem-empty, html.dark .tx-list > li.muted { padding: 14px 16px; background: var(--surface); border-radius: 14px; }
+html.dark .chips button.chip-asset .chip-badge { width: auto; margin-left: 0; vertical-align: 0; }
+html.dark .chips button.chip-asset[aria-checked="true"] .chip-badge { background: var(--asset); color: #000; }
+html.dark .amount { background: transparent; border: 0; padding: 0; min-height: 0; }

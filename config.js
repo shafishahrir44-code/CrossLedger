@@ -1,4 +1,6 @@
-// Public, non-secret configuration. The API key is NOT here — it is entered
-// once on each device and kept in that device's local storage.
-// scripts/deploy.ps1 rewrites this line with your project's function URL.
+// Public, non-secret configuration (safe to publish). Sign-in is per person (Supabase Auth);
+// no API key or database credential is ever in the page. scripts/deploy.ps1 writes these values.
 window.EXPENSE_API_URL = "https://themifjtlrkwytebkkig.supabase.co/functions/v1/expense-api";
+window.SUPABASE_URL = "https://themifjtlrkwytebkkig.supabase.co";
+// the project's publishable key: identifies the project to Supabase Auth; grants no data access
+window.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_nXeqvjMfZqusA_DKTLnmQg_IgMFakKG";
