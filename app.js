@@ -2396,6 +2396,7 @@
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     flushQueue();
+    if (!$("add").hidden) loadRecent();   // entries logged elsewhere (Shortcut, widget, other device) show up here
     if (!$("dash").hidden) loadDash(true);
     if (!$("assets").hidden) loadAssets(true);
     if (!$("reminders").hidden) loadReminders(true);
